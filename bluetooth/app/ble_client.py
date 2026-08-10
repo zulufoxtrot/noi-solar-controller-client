@@ -231,6 +231,8 @@ class SimulatedModbusClient:
             0x00A0: [
                 5, 0, 0, 0, 0, 2109, 3, 76, 0x8004, 1, 1400, 100, 0x0105, 2092, 1, 23
             ],
+            0x00B0: [1, 1200, 25, 30, 0, 500, 10, 5, 30, 0, 0, 0],
+            0x0300: self._stats_block(),
         }
 
     @staticmethod
@@ -251,6 +253,40 @@ class SimulatedModbusClient:
             (0x0020, "LimuTech", 8),
         ):
             regs[base - 0x000A : base - 0x000A + n] = cls._ascii_regs(s, n)
+        return regs
+
+    @staticmethod
+    def _stats_block() -> list[int]:
+        regs = [0] * 0x20  # 0x0300-0x031F
+        regs[0x0300 - 0x0300] = 0            # runtime u32 hi
+        regs[0x0301 - 0x0300] = 8            # runtime u32 lo (= 8 s)
+        regs[0x0302 - 0x0300] = 0x001C       # total gen u32 hi
+        regs[0x0303 - 0x0300] = 0x008C       # total gen u32 lo (= 1835.1 kWh)
+        regs[0x0306 - 0x0300] = 128          # full-charge count
+        regs[0x0307 - 0x0300] = 36           # over-discharge count
+        regs[0x030A - 0x0300] = 2400         # today max PV V (24.00)
+        regs[0x030B - 0x0300] = 500          # today max PV A (5.00)
+        regs[0x030C - 0x0300] = 1200         # today max PV W (120.0)
+        regs[0x030D - 0x0300] = 1400         # today max batt V (14.00)
+        regs[0x030E - 0x0300] = 1200         # today min batt V (12.00)
+        regs[0x030F - 0x0300] = 3500         # today consumption (3.5 kWh)
+        regs[0x0310 - 0x0300] = 250          # today max load A (2.50)
+        regs[0x0311 - 0x0300] = 800          # today max load W (80.0)
+        regs[0x0312 - 0x0300] = 250          # today USB consumption (0.25 kWh)
+        regs[0x0313 - 0x0300] = 150          # today max USB A (1.50)
+        # yesterday block 0x0314-0x031F (same layout as today's stats)
+        regs[0x0314 - 0x0300] = 0x0000       # yesterday gen u32 hi
+        regs[0x0315 - 0x0300] = 0x012C       # yesterday gen u32 lo (= 0.3 kWh)
+        regs[0x0316 - 0x0300] = 2100         # yesterday max PV V (21.00)
+        regs[0x0317 - 0x0300] = 420          # yesterday max PV A (4.20)
+        regs[0x0318 - 0x0300] = 900          # yesterday max PV W (90.0)
+        regs[0x0319 - 0x0300] = 1400         # yesterday max batt V (14.00)
+        regs[0x031A - 0x0300] = 1250         # yesterday min batt V (12.50)
+        regs[0x031B - 0x0300] = 1200         # yesterday consumption (1.2 kWh)
+        regs[0x031C - 0x0300] = 200          # yesterday max load A (2.00)
+        regs[0x031D - 0x0300] = 700          # yesterday max load W (70.0)
+        regs[0x031E - 0x0300] = 150          # yesterday USB consumption (0.15 kWh)
+        regs[0x031F - 0x0300] = 120          # yesterday max USB A (1.20)
         return regs
 
     @property

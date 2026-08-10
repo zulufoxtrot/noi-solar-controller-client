@@ -85,11 +85,11 @@ limu_solar/<sn>/pv_voltage    → 21.09
 limu_solar/<sn>/availability  → online / offline
 ```
 
-Home Assistant auto discovery registers 18 entities (sensors + binary sensors)
+Home Assistant auto discovery registers 57 entities (sensors + binary sensors)
 under the configured discovery prefix, grouped into a single device keyed by the
 controller serial number, plus a **BLE Pairing switch** (see below). State is
 `stat_cla: measurement`, device classes and units set per HA conventions
-(e.g. `dev_cla: battery` for SOC).
+(e.g. `dev_cla: battery` for SOC, `dev_cla: energy` for the kWh counters).
 
 ## BLE pairing toggle (Home Assistant switch)
 

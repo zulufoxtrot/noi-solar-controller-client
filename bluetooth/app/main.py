@@ -17,10 +17,28 @@ log = logging.getLogger(__name__)
 
 
 async def poll_once(client) -> dict:
-    """Read all verified public blocks and decode them into one state dict."""
+    """Read all verified public blocks and decode them into one state dict.
+
+    The extension/stats blocks are optional telemetry: if the controller fails
+    one of those reads, keep the poll alive with what we got rather than
+    dropping the whole BLE link (a single failure shouldn't kill a session).
+    """
     running = await client.read_holding(*registers.BLOCK_RUNNING)
     connect = await client.read_holding(*registers.BLOCK_CONNECT)
-    return {**registers.decode_running(running), **registers.decode_connect(connect)}
+    state = {
+        **registers.decode_running(running),
+        **registers.decode_connect(connect),
+    }
+    for block, decoder in (
+        (registers.BLOCK_EXT, registers.decode_extension),
+        (registers.BLOCK_STATS, registers.decode_stats),
+    ):
+        try:
+            regs = await client.read_holding(*block)
+            state.update(decoder(regs))
+        except Exception as exc:  # noqa: BLE001 - optional block, keep polling
+            log.warning("optional block %#06x failed: %s", block[0], exc)
+    return state
 
 
 async def session(client, cfg: Config, mqtt: MqttBridge | None, box: dict) -> MqttBridge:

@@ -4,7 +4,9 @@ Only *verified* contiguous public ranges are read as blocks: the firmware fails
 an entire block read with exception 0x02 if ANY register in it is invalid.
 
 Scaling (vendor manual): voltage x0.01 V, current x0.1 A, power x0.1 W,
-temperature x0.1 C.
+temperature x0.1 C.  Exception: the manual's temperature x0.1 C contradicts
+live reads (raw 0x001E = 30 while the unit reports ~30 C), so temperatures
+are decoded x1 C.
 """
 from __future__ import annotations
 
@@ -12,12 +14,18 @@ from __future__ import annotations
 BLOCK_SYSINFO = (0x000A, 0x1E)  # 0x000A-0x0027: product/model/versions/SN/vendor
 BLOCK_RUNNING = (0x00A0, 0x10)  # 0x00A0-0x00AF: state, faults, PV, battery, charge
 BLOCK_CONNECT = (0x0080, 0x0C)  # 0x0080-0x008B: GPS/BT/Wi-Fi/MQTT link status
+BLOCK_EXT = (0x00B0, 0x0C)  # 0x00B0-0x00BB: load/USB outlets, temps, fan
+BLOCK_STATS = (0x0300, 0x20)  # 0x0300-0x031F: totals + today's + yesterday's stats
 
 # SOC raw unit is x0.1 % per the manual, but a raw value of 100 was read while
 # the battery was effectively full (14.0 V on a 4S lithium pack), which makes
 # x1 % (=> 100 %) far more plausible than x0.1 % (=> 10 %). Empirically chosen:
 # flip this constant if the official app disagrees.
 SOC_SCALE = 1.0
+
+# Manual says temp x0.1 C, but a raw 0x001E (=30) read while the unit showed
+# ~30 C proves x1 C is right. Flip back if the official app disagrees.
+TEMP_SCALE = 1.0
 
 RUNNING_STATES = {
     0: "power_on_delay",
@@ -100,4 +108,82 @@ def decode_connect(regs: list[int]) -> dict:
         "wifi_connected": "on" if (wifi & 0xFF) else "off",
         "cloud_mqtt_connected": "on" if regs[0x008A - 0x0080] else "off",
         "cloud_mqtt_subscribed": "on" if regs[0x008B - 0x0080] else "off",
+    }
+
+
+def decode_extension(regs: list[int]) -> dict:
+    """Decode the 0x00B0-0x00BB block (12 registers) -> outlets/temps/fan.
+
+    Live reads verified every register in this range is valid and readable.
+    Load/USB current scaling (x0.01 A here) is unverified while the outlets are
+    off (they read zero); adjust the multipliers if the app disagrees.
+    """
+    return {
+        "load_switch": "on" if regs[0x00B0 - 0x00B0] else "off",
+        "load_voltage": round(regs[0x00B1 - 0x00B0] * 0.01, 2),
+        "load_current": round(regs[0x00B2 - 0x00B0] * 0.01, 2),
+        "load_power": round(regs[0x00B3 - 0x00B0] * 0.1, 1),
+        "usb_switch": "on" if regs[0x00B4 - 0x00B0] else "off",
+        "usb_voltage": round(regs[0x00B5 - 0x00B0] * 0.01, 2),
+        "usb_current": round(regs[0x00B6 - 0x00B0] * 0.01, 2),
+        "usb_power": round(regs[0x00B7 - 0x00B0] * 0.1, 1),
+        "controller_temp_c": round(regs[0x00B8 - 0x00B0] * TEMP_SCALE, 1),
+        "external_temp_c": round(regs[0x00B9 - 0x00B0] * TEMP_SCALE, 1),
+        "fan_switch": "on" if regs[0x00BA - 0x00B0] else "off",
+        "fan_speed": regs[0x00BB - 0x00B0],
+    }
+
+
+def _u16_to_u32(hi: int, lo: int) -> int:
+    return (hi << 16) | lo
+
+
+def decode_stats(regs: list[int]) -> dict:
+    """Decode the 0x0300-0x031F statistics block (32 registers).
+
+    Totals are 32-bit, today/yesterday values per the manual's page-8 table.
+    Generation runs are stored in Wh despite the manual's "kWh" column label
+    (a 32-bit word was measured at 1,835,148 = 1835.1 kWh), so kWh = raw/1000.
+    """
+    def energy(hi_idx: int, lo_idx: int) -> float:
+        return round(_u16_to_u32(regs[hi_idx], regs[lo_idx]) / 1000.0, 1)
+
+    return {
+        "total_runtime_s": _u16_to_u32(regs[0x0300 - 0x0300], regs[0x0301 - 0x0300]),
+        "total_generation_kwh": energy(0x0302 - 0x0300, 0x0303 - 0x0300),
+        "total_consumption_kwh": energy(0x0304 - 0x0300, 0x0305 - 0x0300),
+        "full_charge_count": regs[0x0306 - 0x0300],
+        "over_discharge_count": regs[0x0307 - 0x0300],
+        "today_generation_kwh": energy(0x0308 - 0x0300, 0x0309 - 0x0300),
+        "today_max_pv_v": round(regs[0x030A - 0x0300] * 0.01, 2),
+        "today_max_pv_a": round(regs[0x030B - 0x0300] * 0.01, 2),
+        "today_max_pv_w": round(regs[0x030C - 0x0300] * 0.1, 1),
+        "today_max_batt_v": round(regs[0x030D - 0x0300] * 0.01, 2),
+        "today_min_batt_v": round(regs[0x030E - 0x0300] * 0.01, 2),
+        "today_consumption_kwh": round(regs[0x030F - 0x0300] / 1000.0, 3),
+        "today_max_load_a": round(regs[0x0310 - 0x0300] * 0.01, 2),
+        "today_max_load_w": round(regs[0x0311 - 0x0300] * 0.1, 1),
+        "today_usb_consumption_kwh": round(regs[0x0312 - 0x0300] / 1000.0, 3),
+        "today_max_usb_a": round(regs[0x0313 - 0x0300] * 0.01, 2),
+        **decode_yesterday(regs[0x0314 - 0x0300 : 0x0320 - 0x0300]),
+    }
+
+
+def decode_yesterday(regs: list[int]) -> dict:
+    """Decode the 0x0314-0x031F block (12 regs) -> yesterday's stats, same
+    layout as today's run starting at 0x0308."""
+    return {
+        "yesterday_generation_kwh": round(
+            _u16_to_u32(regs[0x0314 - 0x0314], regs[0x0315 - 0x0314]) / 1000.0, 1
+        ),
+        "yesterday_max_pv_v": round(regs[0x0316 - 0x0314] * 0.01, 2),
+        "yesterday_max_pv_a": round(regs[0x0317 - 0x0314] * 0.01, 2),
+        "yesterday_max_pv_w": round(regs[0x0318 - 0x0314] * 0.1, 1),
+        "yesterday_max_batt_v": round(regs[0x0319 - 0x0314] * 0.01, 2),
+        "yesterday_min_batt_v": round(regs[0x031A - 0x0314] * 0.01, 2),
+        "yesterday_consumption_kwh": round(regs[0x031B - 0x0314] / 1000.0, 3),
+        "yesterday_max_load_a": round(regs[0x031C - 0x0314] * 0.01, 2),
+        "yesterday_max_load_w": round(regs[0x031D - 0x0314] * 0.1, 1),
+        "yesterday_usb_consumption_kwh": round(regs[0x031E - 0x0314] / 1000.0, 3),
+        "yesterday_max_usb_a": round(regs[0x031F - 0x0314] * 0.01, 2),
     }
