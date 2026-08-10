@@ -70,12 +70,14 @@ async def discover_controller(
 class BleModbusClient:
     """Async Modbus-RTU-over-BLE client (one outstanding request at a time).
 
-    The controller gates some registers (0x00A0 config/telemetry header) behind
-    a PIN lock (default "000000"). If a read comes back EXC 0x04 and we have not
-    unlocked yet, this writes the PIN as ASCII registers via FC10 @ 0x0400 and
-    retries. Note the controller acknowledges that write path with an illegal
-    register exception (0x02) while still acting on it, so the unlock write is
-    fire-and-forget.
+    The controller gates BLE access (reads return EXC 0x04) — increasingly so
+    on reconnects — behind a PIN lock (default "000000"). This client presents
+    the PIN as ASCII registers via FC10 @ 0x0400 immediately after connect,
+    so reads are un-gated from the first one. If a read still comes back EXC
+    0x04 (e.g. wrong PIN), it re-presents the PIN once and retries while the
+    gate is not yet open. Note the controller acknowledges the PIN write with
+    an illegal-register exception (0x02) or auth exception (0x04) while still
+    acting on it, so the unlock write is fire-and-forget.
     """
 
     PIN_REG = 0x0400  # register receiving the ASCII PIN
@@ -140,6 +142,10 @@ class BleModbusClient:
         await self._client.start_notify(notify_char, self._on_notify)
         self._connected = True
         log.info("connected to %r (%s)", self.name, self.device.address)
+        # The controller re-gates the link right after connect (0x04), especially
+        # on a reconnect/re-pair, so present the PIN as soon as the link is up.
+        # Unlock persists across reconnects, so re-sending is harmless/idempotent.
+        await self._unlock()
 
     async def disconnect(self) -> None:
         if self._client is not None:
@@ -179,14 +185,15 @@ class BleModbusClient:
                 pass  # re-check buffer/deadline
 
     async def _unlock(self) -> None:
-        """Write the PIN as ASCII regs @ 0x0400 (FC10); device errors 0x02 but
-        still opens the gates, so any response is treated as success."""
-        log.info("controller auth-gated: sending PIN %r to %#06x", self.pin, self.PIN_REG)
+        """Present the PIN as ASCII regs @ 0x0400 (FC10). The device errors 0x02
+        (sometimes 0x04) on the write yet still honours it, so any response is
+        treated as success. Called ASAP after every connect."""
+        log.info("presenting BLE PIN %r to %#06x", self.pin, self.PIN_REG)
         await self._send(modbus.build_write_multi(self.PIN_REG, self._ascii_regs(self.pin)))
         try:
             await self._wait_frame()
         except (modbus.ModbusError, TimeoutError):
-            pass  # 0x02 rejection / no ack is expected
+            pass  # 0x02/0x04 rejection / no ack is expected
         self._unlocked = True
 
     async def read_holding(self, start: int, qty: int) -> list[int]:

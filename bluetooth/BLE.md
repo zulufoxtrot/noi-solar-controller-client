@@ -47,7 +47,7 @@ Subscribing to a write-only char fails with `CBATTErrorDomain 6 "request is not 
 * **Presenting the PIN** = FC 0x10, ASCII PIN packed 2 chars per register (regs `[0x3030, 0x3030, 0x3030]` for `"000000"`), written to **`0x0400`**. The device answers the write itself with **exception `0x02`** (illegal address) while still accepting it — treat the `0x02` response as success, not a failure. Verified: after that write, gated/telemetry reads succeed from the same link. Frame: `FF 10 04 00 00 03 06 30 30 30 30 30 30 20 FB`.
   * The unlocked state **persists across BLE reconnects**; it resets only on a power cycle.
 * The app has `_sendPassword` (in `usb_settings_viewmodel.dart` context) and a "Bluetooth Password" settings UI; the controller's fault bitmap/event log even carry "wrong password" flags (event 128, byte2 bit). Ground truth of the app's exact frame: `ble_sniff.js` Frida hook (needs root).
-* PoC: `app/` auto-unlocks — on exception `0x04` it writes the PIN as above to `0x0400` and retries (`BLE_PIN` env, default `000000`).
+* PoC: `app/` presents the PIN immediately after every connect (BLE link, incl. reconnects) — FC10 ASCII PIN to `0x0400` — and re-presents it once if a read is still gated, then retries (`BLE_PIN` env, default `000000`).
 
 ## ✅ Blocker cleared 2026-08-10 (power cycle)
 

@@ -57,7 +57,7 @@ natively there.
 | `CONTROLLER_NAME_PREFIX` | `LTM-` | advertised-name filter for auto-discovery |
 | `CONTROLLER_ADDRESS` | empty | controller MAC/UUID → skip scanning |
 | `BLE_ADAPTER` | empty | e.g. `hci0` (Linux/BlueZ only) |
-| `BLE_PIN` | `000000` | unlock PIN; written as ASCII via FC10 to `0x0400` when a read is auth-gated (EXC `0x04`) |
+| `BLE_PIN` | `000000` | unlock PIN; presented as ASCII via FC10 to `0x0400` immediately after every connect |
 | `SCAN_TIMEOUT` | `20` | discovery scan duration (s) |
 | `READ_TIMEOUT` | `5` | per-read response timeout (s) |
 | `BLE_TIMEOUT` | `10` | BLE connect timeout (s) |
@@ -122,10 +122,11 @@ limu_solar/<sn>/availability_bridge   → online / offline    (switch availabili
 * Responses may arrive fragmented — accumulated by expected frame length.
 * Only the exact documented public ranges are read as blocks; a block read fails
   entirely (exception `0x02`) if any register in it is invalid.
-* The config area (`0x0400+`) is password-gated: reads return exception `0x04`.
-  The bridge **auto-unlocks** on the first such error by writing the ASCII PIN
-  to `0x0400` via FC10 (the device replies `0x02` to that write yet honours it),
-  then retries. `BLE_PIN` overrides the default `000000`.
+* The config (`0x0400+`) and — on reconnects — the whole link are password-gated:
+  reads return exception `0x04`. The bridge **presents the PIN immediately after
+  every connect** by writing the ASCII PIN to `0x0400` via FC10 (the device
+  replies `0x02`/`0x04` to that write yet honours it), and re-presents it lazily
+  if a read is still gated. `BLE_PIN` overrides the default `000000`.
 
 ## Open items
 
