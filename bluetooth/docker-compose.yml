@@ -1,0 +1,35 @@
+# Run the BLE->MQTT bridge on a Linux host that has Bluetooth + BlueZ.
+#
+# Requires:
+#   * the host Bluetooth adapter (hci0) is available and unblocked
+#   * /var/run/dbus on the host exposes the BlueZ system bus (default on most
+#     distros; systemd links /run/dbus -> /var/run/dbus)
+#
+# network_mode: host is used so the container can reach BLE AND your broker
+# (MQTT_HOST can be 127.0.0.1). If the broker is remote you may use the default
+# bridge network instead, but BLE still needs host mode on most kernels.
+#
+# macOS caveat: Docker Desktop cannot pass Bluetooth through — run natively:
+#   pip install -r requirements.txt && MQTT_HOST=... python -m app
+services:
+  limu-solar:
+    build: .
+    container_name: limu-solar
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - /var/run/dbus:/var/run/dbus:ro
+    environment:
+      MQTT_HOST: 127.0.0.1
+      MQTT_PORT: "1883"
+      MQTT_USERNAME: ""
+      MQTT_PASSWORD: ""
+      MQTT_TOPIC_PREFIX: limu_solar
+      MQTT_DISCOVERY_PREFIX: homeassistant
+      CONTROLLER_NAME_PREFIX: LTM-
+      CONTROLLER_ADDRESS: ""          # optional: MAC of your controller to skip scanning
+      BLE_ADAPTER: ""                 # optional: hci0
+      POLL_INTERVAL: "30"
+      DEVICE_NAME: Limu Solar Controller
+      SIMULATE: "false"
+      LOG_LEVEL: INFO
