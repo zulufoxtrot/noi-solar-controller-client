@@ -215,6 +215,30 @@ class BleModbusClient:
                     raise
             raise RuntimeError("unreachable")
 
+    async def write_holding(self, start: int, value: int) -> None:
+        """FC06/FC10 write a single register (e.g. a load/USB/fan switch).
+
+        Uses the multi-register frame for one value; unlocks first if the
+        register is auth-gated, same retry pattern as reads.
+        """
+        async with self._lock:
+            for attempt in (0, 1):
+                await self._send(modbus.build_write_multi(start, [value]))
+                try:
+                    exp = await self._wait_frame()
+                    modbus.parse_ack(bytes(self._buf[:exp]))
+                    return
+                except modbus.ModbusError as exc:
+                    if (
+                        attempt == 0
+                        and not self._unlocked
+                        and exc.code == self.AUTH_EXC
+                    ):
+                        await self._unlock()
+                        continue
+                    raise
+            raise RuntimeError("unreachable")
+
 
 class SimulatedModbusClient:
     """Fake controller for testing the MQTT/HA path without BLE hardware.
@@ -229,9 +253,9 @@ class SimulatedModbusClient:
             0x000A: self._sysinfo_block(),
             0x0080: [0, 0, 0, 0, 0, 0, 0, 0, 0xCA01, 0, 1, 1],
             0x00A0: [
-                5, 0, 0, 0, 0, 2109, 3, 76, 0x8004, 1, 1400, 100, 0x0105, 2092, 1, 23
+                5, 0, 0, 0, 0, 2109, 3, 76, 0x8004, 1, 1400, 100, 0x0105, 2092, 1, 0xFFC8
             ],
-            0x00B0: [1, 1200, 25, 30, 0, 500, 10, 5, 30, 0, 0, 0],
+            0x00B0: [1, 1200, 25, 30, 0, 500, 10, 5, 304, 0xFFFF, 0, 0],
             0x0300: self._stats_block(),
         }
 
@@ -257,7 +281,7 @@ class SimulatedModbusClient:
 
     @staticmethod
     def _stats_block() -> list[int]:
-        regs = [0] * 0x20  # 0x0300-0x031F
+        regs = [0] * 0x14  # 0x0300-0x0313
         regs[0x0300 - 0x0300] = 0            # runtime u32 hi
         regs[0x0301 - 0x0300] = 8            # runtime u32 lo (= 8 s)
         regs[0x0302 - 0x0300] = 0x001C       # total gen u32 hi
@@ -274,19 +298,6 @@ class SimulatedModbusClient:
         regs[0x0311 - 0x0300] = 800          # today max load W (80.0)
         regs[0x0312 - 0x0300] = 250          # today USB consumption (0.25 kWh)
         regs[0x0313 - 0x0300] = 150          # today max USB A (1.50)
-        # yesterday block 0x0314-0x031F (same layout as today's stats)
-        regs[0x0314 - 0x0300] = 0x0000       # yesterday gen u32 hi
-        regs[0x0315 - 0x0300] = 0x012C       # yesterday gen u32 lo (= 0.3 kWh)
-        regs[0x0316 - 0x0300] = 2100         # yesterday max PV V (21.00)
-        regs[0x0317 - 0x0300] = 420          # yesterday max PV A (4.20)
-        regs[0x0318 - 0x0300] = 900          # yesterday max PV W (90.0)
-        regs[0x0319 - 0x0300] = 1400         # yesterday max batt V (14.00)
-        regs[0x031A - 0x0300] = 1250         # yesterday min batt V (12.50)
-        regs[0x031B - 0x0300] = 1200         # yesterday consumption (1.2 kWh)
-        regs[0x031C - 0x0300] = 200          # yesterday max load A (2.00)
-        regs[0x031D - 0x0300] = 700          # yesterday max load W (70.0)
-        regs[0x031E - 0x0300] = 150          # yesterday USB consumption (0.15 kWh)
-        regs[0x031F - 0x0300] = 120          # yesterday max USB A (1.20)
         return regs
 
     @property
@@ -308,3 +319,16 @@ class SimulatedModbusClient:
             raise modbus.ModbusError(f"SIMULATE: no canned block at {start:#06x}+{qty}")
         await asyncio.sleep(0.05)
         return list(block)
+
+    async def write_holding(self, start: int, value: int) -> None:
+        """Simulated switch write: mutates the canned block so a subsequent
+        read reflects the new value (exercises the full MQTT toggle path)."""
+        if not self._connected:
+            raise ConnectionError("not connected")
+        for base, block in self._blocks.items():
+            if base <= start < base + len(block):
+                reg = list(block)
+                reg[start - base] = value & 0xFFFF
+                self._blocks[base] = reg
+                return
+        raise modbus.ModbusError(f"SIMULATE: no writable register at {start:#06x}")

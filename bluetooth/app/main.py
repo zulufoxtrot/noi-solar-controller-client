@@ -54,7 +54,10 @@ async def session(client, cfg: Config, mqtt: MqttBridge | None, box: dict) -> Mq
             sysinfo.get("manufacturer"), sysinfo.get("model"),
             node_id, sysinfo.get("sw_version"),
         )
-        mqtt = MqttBridge(cfg, node_id, sysinfo, on_pair=box["on_pair"])
+        mqtt = MqttBridge(
+            cfg, node_id, sysinfo,
+            on_pair=box["on_pair"], on_command=box["on_command"],
+        )
         mqtt.connect()
         mqtt.publish_discovery()
     mqtt.set_availability(True)
@@ -92,9 +95,13 @@ async def run(cfg: Config) -> None:
 
     pair_changed = asyncio.Event()
     pair_q: asyncio.Queue[bool] = asyncio.Queue()
+    cmd_q: asyncio.Queue[tuple[str, bool]] = asyncio.Queue()
     box = {
         "paired": True,
         "on_pair": lambda pair: loop.call_soon_threadsafe(pair_q.put_nowait, pair),
+        "on_command": lambda key, val: loop.call_soon_threadsafe(
+            cmd_q.put_nowait, (key, val)
+        ),
         "pair_changed": pair_changed,
     }
     mqtt: MqttBridge | None = None
@@ -118,7 +125,24 @@ async def run(cfg: Config) -> None:
                 mqtt.publish_pairing(pair)
             pair_changed.set()
 
+    async def command_consumer() -> None:
+        """Forward HA switch toggles to controller registers (paho thread)."""
+        nonlocal client
+        while True:
+            key, value = await cmd_q.get()
+            reg = registers.SWITCH_REGISTERS.get(key)
+            if reg is None or client is None or not client.is_connected:
+                log.warning("switch %s: no controller link, dropping write", key)
+                continue
+            word = 1 if value else 0
+            log.info("switch command: %s -> %s (reg %#06x)", key, word, reg)
+            try:
+                await client.write_holding(reg, word)
+            except Exception as exc:  # noqa: BLE001 - don't kill the loop
+                log.error("switch %s write failed: %s", key, exc)
+
     consumer = asyncio.create_task(pair_consumer())
+    cmd_consumer = asyncio.create_task(command_consumer())
     try:
         while not stop.is_set():
             if not box["paired"]:
@@ -200,8 +224,10 @@ async def run(cfg: Config) -> None:
                     pass
     finally:
         consumer.cancel()
+        cmd_consumer.cancel()
         try:
             await consumer
+            await cmd_consumer
         except asyncio.CancelledError:
             pass
         if client is not None:

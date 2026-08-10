@@ -72,18 +72,24 @@ max PV V 0x0050 (=80) · max batt V 0x0051 (=36) · max charge A 0x0052 (=30) ·
 | 0x00A1 | Fault code (4 regs) | 0 |
 | 0x00A5/6/7 | PV voltage / current / power | 21.09 V / 0.3 A / 7.6 W |
 | 0x00A8 | Battery type (bits14-15: 1 lead-acid, 2 lithium; bits8-13 ID; bits0-7 string count) | 0x8004 = lithium ×4 |
-| 0x00A9 | Battery rated voltage | 1 |
+| 0x00A9 | Battery rated voltage | 1 — no app equivalent; **not published** (undecodable) |
 | 0x00AA | Accumulator voltage | 14.00 V |
 | 0x00AB | SOC ×0.1 % (manual) — raw 100 read on a full 4S lithium pack ⇒ more likely ×1 %; PoC uses ×1 | 100 → 100 % (assumed) |
 | 0x00AC | byte0 charge phase (0 off,1 fast,2 equalize,3 float,4 balance,5 MPPT,6 pause), byte1 charge switch | 0x0105 |
-| 0x00AD/AE/AF | Charging voltage / current / power | 20.92 V / 0.1 A / 2.3 W |
-| 0x00B0–B3 | Load switch / V / A / W | 0 / 0 / 0 / 0 (✅ read 2026-08-11) |
-| 0x00B4–B7 | USB switch / V / A / W | 0 / 0 / 16 / 16 (✅ read 2026-08-11) |
-| 0x00B8/B9 | Internal / external temperature | 0x001E=30 / 0 (✅ read; matches ~30 C ⇒ ×1 C, not ×0.1) |
-| 0x00BA/BB | Fan switch / speed | 0 / 0 |
+| 0x00AD/AE/AF | Charging voltage / current / power | 20.92 V / 0.1 A / −5.6 W |
+| 0x00B0–B3 | Load switch / V / A / W (switch is **writable**, FC10) | 0 / 0 / 0 / 0 (✅ read 2026-08-11) |
+| 0x00B4–B7 | USB switch / V / A / W (switch **writable**) | 0 / 0 / 16 / 16 (✅ read 2026-08-11) |
+| 0x00B8 | Controller temperature ×0.1 C | 304 ⇒ 30.4 C (✅ read 2026-08-11) |
+| 0x00B9 | External temperature (optional sensor) | 0xFFFF = no sensor; **not published** |
+| 0x00BA/BB | Fan switch (**writable**) / speed | 0 / 0 |
+
+> Charge current/power (0x00AE/AF) are **signed** 16-bit: a discharge reads a
+> negative word, e.g. 0xFFC8 = −56 ⇒ −5.6 W at ×0.1 W. (Live 2026-08-11.) 
 
 > Note: reads must not span segment boundaries. 0x00A0-0x00AF and 0x00B0-0x00BF
 > must be read as two separate blocks; a single 0x00A0→0x00BB read fails 0x04.
+> Load/USB/fan switches are exposed as writable HA switches; the bridge writes
+> FC10 to 0x00B0/0x00B4/0x00BA. Real-write confirmation pending next deploy.
 
 Fault bitmap (0x00A1, 4 B): byte0 = PV reversed, PV overV, charge-circuit open/short, battery absent/reversed/overV/overcharge/underV, low-power disconnect, hi/lo-temp protections, charge overcurrent (1.3×); byte1 = load circuit fault, load overcurrent levels, USB overV/lowV/overcurrent, internal temp states; byte2 = GPS fail, **wrong password**, Wi-Fi lost, cellular lost, server not connected, server warning, time-sync failed; byte3 reserved.
 
@@ -93,7 +99,7 @@ Controller events: count at 0x0100, records at 0x0101… (6 regs × 20). Communi
 Event codes: 1 power-on ok · 2 init fail · 3/4 start/end charging · 5/6 load on/off · 7/8 charge circuit open/short · 9/10 load open/short · 11 batt low alarm · 12 batt low-V protect · 13 batt overpressure · 14 overheat · 15 load short · 16/17 charge on/off · 18/19 USB on/off · 20 PV overV · 21 charge overcurrent · 22 battery absent · **128 BT wrong password · 129 BT connected · 130/131 Wi-Fi fail/ok · 132/133 MQTT connect fail/ok · 134/135 MQTT subscribe fail/ok**.
 
 ### Statistics Area 0x0300–0x0378 (R)
-Total runtime (2, s — statically 8 across 5 s, unit unconfirmed) · cumulative generation (2, Wh — measured 0x001C008C=1,835,148 ⇒ 1835.1 kWh; manual's "kWh" label is really Wh) · total consumption (2) · full-charge count · over-discharge count · today's block (0x0308–0x0313): generation Wh, PV max V,A,W / batt max-min V / consumption Wh / load max A,W / USB Wh,max A (0x0308–0x0313) · yesterday at 0x0314 (same layout) … daily blocks; statistical log: 12-register records, date at word 14, h:m:s at words 15–16. All of 0x0300–0x031F read OK in one 32-reg block (✅ 2026-08-11).
+Total runtime (2, s — statically 8 across 5 s, unit unconfirmed) · cumulative generation (2, Wh — measured 0x001C008C=1,835,148 ⇒ 1835.1 kWh; manual's "kWh" label is really Wh) · total consumption (2) · full-charge count · over-discharge count · today's block (0x0308–0x0313): generation Wh, PV max V,A,W / batt max-min V / consumption Wh / load max A,W / USB Wh,max A · yesterday at 0x0314 (same layout, not read by the bridge) … daily blocks; statistical log: 12-register records, date at word 14, h:m:s at words 15–16. The bridge reads 0x0300–0x0313 in one 20-reg block (✅ 2026-08-11).
 
 ### Undocumented / gated areas
 * **0x0400–0x0480+**: reads → exception 0x04 (operation failed). Almost certainly the **BLE-password-gated config area** (Wi-Fi credentials, MQTT settings, charge parameters). The manual's pages 13-14 (covering 0x0400+) are missing from the PDF.

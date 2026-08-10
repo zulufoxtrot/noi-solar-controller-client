@@ -26,6 +26,10 @@ except ImportError:  # paho-mqtt < 2.0
 
 log = logging.getLogger(__name__)
 
+# keys that map to writable registers; HA publishes to <base>/<key>/set and the
+# bridge forwards the on/off value to main.py's on_command(client writer).
+SWITCH_KEYS = ("load_switch", "usb_switch", "fan_switch")
+
 # key -> (component, name, unit, device_class, state_class, icon, entity_category, options)
 SENSORS: dict[str, tuple] = {
     "pv_voltage": ("sensor", "PV Voltage", "V", "voltage", "measurement", None, None, None),
@@ -34,7 +38,6 @@ SENSORS: dict[str, tuple] = {
     "battery_voltage": ("sensor", "Battery Voltage", "V", "voltage", "measurement", None, None, None),
     "battery_soc": ("sensor", "Battery SOC", "%", "battery", "measurement", None, None, None),
     "battery_type": ("sensor", "Battery Type", None, None, None, "mdi:battery", "diagnostic", None),
-    "battery_rated_voltage": ("sensor", "Battery Rated Voltage", "V", "voltage", None, None, "diagnostic", None),
     "running_state": ("sensor", "Running State", None, "enum", None, "mdi:solar-power", None,
                       ["power_on_delay", "upgrading", "upgrade_failed", "init",
                        "battery_activated", "running", "manual_shutdown", "unknown"]),
@@ -50,20 +53,20 @@ SENSORS: dict[str, tuple] = {
     "wifi_connected": ("binary_sensor", "Wi-Fi", None, "connectivity", None, None, "diagnostic", None),
     "cloud_mqtt_connected": ("binary_sensor", "Cloud MQTT", None, "connectivity", None, None, "diagnostic", None),
     "cloud_mqtt_subscribed": ("binary_sensor", "Cloud MQTT Subscription", None, "connectivity", None, None, "diagnostic", None),
-    # load / USB outlets, temperatures, fan (0x00B0 block)
-    "load_switch": ("binary_sensor", "Load Switch", None, "power", None, None, None, None),
+    # load / USB outlets, controller temp, fan (0x00B0 block); the three
+    # switches are writable `switch` entities driven by main.py's on_command.
+    "load_switch": ("switch", "Load Switch", None, None, None, "mdi:power-socket-eu", None, None),
     "load_voltage": ("sensor", "Load Voltage", "V", "voltage", "measurement", None, None, None),
     "load_current": ("sensor", "Load Current", "A", "current", "measurement", None, None, None),
     "load_power": ("sensor", "Load Power", "W", "power", "measurement", None, None, None),
-    "usb_switch": ("binary_sensor", "USB Switch", None, "power", None, None, None, None),
+    "usb_switch": ("switch", "USB Switch", None, None, None, "mdi:usb", None, None),
     "usb_voltage": ("sensor", "USB Voltage", "V", "voltage", "measurement", None, None, None),
     "usb_current": ("sensor", "USB Current", "A", "current", "measurement", None, None, None),
     "usb_power": ("sensor", "USB Power", "W", "power", "measurement", None, None, None),
     "controller_temp_c": ("sensor", "Controller Temperature", "°C", "temperature", "measurement", "mdi:thermometer", None, None),
-    "external_temp_c": ("sensor", "External Temperature", "°C", "temperature", "measurement", "mdi:thermometer", None, None),
-    "fan_switch": ("binary_sensor", "Fan Switch", None, "running", None, None, None, None),
+    "fan_switch": ("switch", "Fan Switch", None, None, None, "mdi:fan", None, None),
     "fan_speed": ("sensor", "Fan Speed", None, "speed", "measurement", "mdi:fan", None, None),
-    # lifetime / today / yesterday statistics (0x0300 block)
+    # lifetime / today statistics (0x0300 block)
     "total_runtime_s": ("sensor", "Total Runtime", "s", "duration", "total_increasing", "mdi:timer-sand", "diagnostic", None),
     "total_generation_kwh": ("sensor", "Total Generation", "kWh", "energy", "total_increasing", "mdi:solar-power", None, None),
     "total_consumption_kwh": ("sensor", "Total Consumption", "kWh", "energy", "total_increasing", "mdi:power-plug", None, None),
@@ -80,17 +83,6 @@ SENSORS: dict[str, tuple] = {
     "today_max_load_w": ("sensor", "Today Max Load Power", "W", "power", "measurement", None, "diagnostic", None),
     "today_usb_consumption_kwh": ("sensor", "Today USB Consumption", "kWh", "energy", "total_increasing", "mdi:usb", None, None),
     "today_max_usb_a": ("sensor", "Today Max USB Current", "A", "current", "measurement", None, "diagnostic", None),
-    "yesterday_generation_kwh": ("sensor", "Yesterday's Generation", "kWh", "energy", "measurement", "mdi:solar-power", None, None),
-    "yesterday_max_pv_v": ("sensor", "Yesterday Max PV Voltage", "V", "voltage", "measurement", None, "diagnostic", None),
-    "yesterday_max_pv_a": ("sensor", "Yesterday Max PV Current", "A", "current", "measurement", None, "diagnostic", None),
-    "yesterday_max_pv_w": ("sensor", "Yesterday Max PV Power", "W", "power", "measurement", None, "diagnostic", None),
-    "yesterday_max_batt_v": ("sensor", "Yesterday Max Battery Voltage", "V", "voltage", "measurement", None, "diagnostic", None),
-    "yesterday_min_batt_v": ("sensor", "Yesterday Min Battery Voltage", "V", "voltage", "measurement", None, "diagnostic", None),
-    "yesterday_consumption_kwh": ("sensor", "Yesterday's Consumption", "kWh", "energy", "measurement", "mdi:power-plug", None, None),
-    "yesterday_max_load_a": ("sensor", "Yesterday Max Load Current", "A", "current", "measurement", None, "diagnostic", None),
-    "yesterday_max_load_w": ("sensor", "Yesterday Max Load Power", "W", "power", "measurement", None, "diagnostic", None),
-    "yesterday_usb_consumption_kwh": ("sensor", "Yesterday USB Consumption", "kWh", "energy", "measurement", "mdi:usb", None, None),
-    "yesterday_max_usb_a": ("sensor", "Yesterday Max USB Current", "A", "current", "measurement", None, "diagnostic", None),
 }
 
 
@@ -101,6 +93,7 @@ class MqttBridge:
         node_id: str,
         device_info: dict,
         on_pair: Callable[[bool], None] | None = None,
+        on_command: Callable[[str, bool], None] | None = None,
     ):
         self._cfg = cfg
         self.node_id = node_id
@@ -110,6 +103,8 @@ class MqttBridge:
         self.pairing_topic = f"{self.base}/pairing"
         self.pairing_set_topic = f"{self.base}/pairing/set"
         self._on_pair = on_pair
+        self._on_command = on_command
+        self._cmd_topics = {f"{self.base}/{k}/set": k for k in SWITCH_KEYS}
         self._device = {
             "ids": [node_id],
             "name": cfg.device_name,
@@ -143,6 +138,8 @@ class MqttBridge:
             client.publish(self.availability_topic, "online", retain=True)
             client.publish(self.bridge_availability_topic, "online", retain=True)
             client.subscribe(self.pairing_set_topic)
+            for topic in self._cmd_topics:
+                client.subscribe(topic)
         else:
             log.error("MQTT connect refused: %s", rc)
 
@@ -152,6 +149,8 @@ class MqttBridge:
             client.publish(self.availability_topic, "online", retain=True)
             client.publish(self.bridge_availability_topic, "online", retain=True)
             client.subscribe(self.pairing_set_topic)
+            for topic in self._cmd_topics:
+                client.subscribe(topic)
         else:
             log.error("MQTT connect refused: %s", reason_code)
 
@@ -164,17 +163,30 @@ class MqttBridge:
             log.warning("MQTT disconnected unexpectedly: %s", reason_code)
 
     def _on_message(self, _client, _userdata, message) -> None:  # paho thread
-        if message.topic != self.pairing_set_topic:
-            return
+        topic = message.topic
         payload = (message.payload or b"").decode().strip().lower()
-        if payload in ("paired", "on", "1", "true", "yes"):
-            if self._on_pair is not None:
-                self._on_pair(True)
-        elif payload in ("unpaired", "off", "0", "false", "no"):
-            if self._on_pair is not None:
-                self._on_pair(False)
-        else:
-            log.warning("ignoring unknown pairing command %r", payload)
+        if topic == self.pairing_set_topic:
+            if payload in ("paired", "on", "1", "true", "yes"):
+                if self._on_pair is not None:
+                    self._on_pair(True)
+            elif payload in ("unpaired", "off", "0", "false", "no"):
+                if self._on_pair is not None:
+                    self._on_pair(False)
+            else:
+                log.warning("ignoring unknown pairing command %r", payload)
+            return
+        key = self._cmd_topics.get(topic)
+        if key is not None:
+            if payload in ("on", "1", "true", "yes"):
+                if self._on_command is not None:
+                    self._on_command(key, True)
+            elif payload in ("off", "0", "false", "no"):
+                if self._on_command is not None:
+                    self._on_command(key, False)
+            else:
+                log.warning("ignoring unknown switch command %r for %s", payload, key)
+            return
+        log.warning("ignoring message on unsubscribed topic %r", topic)
 
     def connect(self) -> None:
         self._client.connect(self._cfg.mqtt_host, self._cfg.mqtt_port, keepalive=60)
@@ -213,6 +225,12 @@ class MqttBridge:
             if component == "binary_sensor":
                 payload["pl_on"] = "on"
                 payload["pl_off"] = "off"
+            elif component == "switch":
+                payload["cmd_t"] = f"{self.base}/{key}/set"
+                payload["pl_on"] = "on"
+                payload["pl_off"] = "off"
+                payload["stat_on"] = "on"
+                payload["stat_off"] = "off"
             topic = f"{self._cfg.mqtt_discovery_prefix}/{component}/{self.node_id}/{key}/config"
             self._client.publish(topic, json.dumps(payload), retain=True)
         switch = {
@@ -234,9 +252,10 @@ class MqttBridge:
         )
         self._client.publish(switch_topic, json.dumps(switch), retain=True)
         log.info(
-            "published HA discovery for %d entities + pairing switch under %s",
+            "published HA discovery for %d entities under %s (incl. %d switches)",
             len(SENSORS),
             self._cfg.mqtt_discovery_prefix,
+            sum(1 for k in SENSORS if SENSORS[k][0] == "switch"),
         )
 
     def set_availability(self, online: bool) -> None:
