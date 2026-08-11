@@ -106,7 +106,7 @@ def decode_running(regs: list[int]) -> dict:
         "battery_type": f"{batt_kind or 'unknown'} x{batt_cells}",
         "battery_rated_voltage": rated_v,
         "battery_voltage": round(regs[0x00AA - 0x00A0] * 0.01, 2),
-        "battery_soc": round(regs[0x00AB - 0x00A0] * SOC_SCALE, 1),
+        "battery_soc": int(round(regs[0x00AB - 0x00A0] * SOC_SCALE)),
         "charge_phase": CHARGE_PHASES.get((phase_reg >> 8) & 0xFF, "unknown"),
         "charge_switch": "on" if (phase_reg & 0xFF) else "off",
         "charge_voltage": round(regs[0x00AD - 0x00A0] * 0.01, 2),
@@ -165,12 +165,17 @@ def _u16_to_u32(hi: int, lo: int) -> int:
 def decode_stats(regs: list[int]) -> dict:
     """Decode the 0x0300-0x0313 statistics block (20 registers).
 
-    Totals are 32-bit, today's values per the manual's page-8 table.
-    Generation runs are stored in Wh despite the manual's "kWh" column label
+    Totals are 32-bit and stored in Wh despite the manual's "0.1 kWh" label
     (a 32-bit word was measured at 1,835,148 = 1835.1 kWh), so kWh = raw/1000.
+    Every today value is a SINGLE 16-bit register (manual page-8/9 table):
+    energies are x0.1 Wh (=> kWh = raw/10000), voltages x0.01 V, currents and
+    powers x0.1 A / x0.1 W.
     """
     def energy(hi_idx: int, lo_idx: int) -> float:
         return round(_u16_to_u32(regs[hi_idx], regs[lo_idx]) / 1000.0, 1)
+
+    def energy_today(idx: int) -> float:
+        return round(regs[idx] * 0.1 / 1000.0, 4)
 
     return {
         "total_runtime_s": int(_u16_to_u32(regs[0x0300 - 0x0300], regs[0x0301 - 0x0300])),
@@ -178,15 +183,16 @@ def decode_stats(regs: list[int]) -> dict:
         "total_consumption_kwh": energy(0x0304 - 0x0300, 0x0305 - 0x0300),
         "full_charge_count": regs[0x0306 - 0x0300],
         "over_discharge_count": regs[0x0307 - 0x0300],
-        "today_generation_kwh": energy(0x0308 - 0x0300, 0x0309 - 0x0300),
-        "today_max_pv_v": round(regs[0x030A - 0x0300] * 0.01, 2),
-        "today_max_pv_a": round(regs[0x030B - 0x0300] * 0.01, 2),
-        "today_max_pv_w": round(regs[0x030C - 0x0300] * 0.1, 1),
-        "today_max_batt_v": round(regs[0x030D - 0x0300] * 0.01, 2),
-        "today_min_batt_v": round(regs[0x030E - 0x0300] * 0.01, 2),
-        "today_consumption_kwh": round(regs[0x030F - 0x0300] / 1000.0, 3),
-        "today_max_load_a": round(regs[0x0310 - 0x0300] * 0.01, 2),
-        "today_max_load_w": round(regs[0x0311 - 0x0300] * 0.1, 1),
-        "today_usb_consumption_kwh": round(regs[0x0312 - 0x0300] / 1000.0, 3),
-        "today_max_usb_a": round(regs[0x0313 - 0x0300] * 0.01, 2),
+        "today_generation_kwh": energy_today(0x0308 - 0x0300),
+        "today_max_pv_v": round(regs[0x0309 - 0x0300] * 0.01, 2),
+        "today_max_pv_a": round(regs[0x030A - 0x0300] * 0.1, 2),
+        "today_max_pv_w": round(regs[0x030B - 0x0300] * 0.1, 1),
+        "today_max_batt_v": round(regs[0x030C - 0x0300] * 0.01, 2),
+        "today_min_batt_v": round(regs[0x030D - 0x0300] * 0.01, 2),
+        "today_consumption_kwh": energy_today(0x030E - 0x0300),
+        "today_max_load_a": round(regs[0x030F - 0x0300] * 0.1, 2),
+        "today_max_load_w": round(regs[0x0310 - 0x0300] * 0.1, 1),
+        "today_usb_consumption_kwh": energy_today(0x0311 - 0x0300),
+        "today_max_usb_a": round(regs[0x0312 - 0x0300] * 0.1, 2),
+        "today_max_usb_w": round(regs[0x0313 - 0x0300] * 0.1, 1),
     }

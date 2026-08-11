@@ -36,7 +36,7 @@ SENSORS: dict[str, tuple] = {
     "pv_current": ("sensor", "PV Current", "A", "current", "measurement", None, None, None),
     "pv_power": ("sensor", "PV Power", "W", "power", "measurement", None, None, None),
     "battery_voltage": ("sensor", "Battery Voltage", "V", "voltage", "measurement", None, None, None),
-    "battery_soc": ("sensor", "Battery SOC", "%", "battery", "measurement", None, None, None),
+    "battery_soc": ("sensor", "Battery", "%", "battery", "measurement", None, None, None),
     "battery_type": ("sensor", "Battery Type", None, None, None, "mdi:battery", "diagnostic", None),
     "running_state": ("sensor", "Running State", None, "enum", None, "mdi:solar-power", None,
                       ["power_on_delay", "upgrading", "upgrade_failed", "init",
@@ -86,7 +86,20 @@ SENSORS: dict[str, tuple] = {
     "today_max_load_w": ("sensor", "Today Max Load Power", "W", "power", "measurement", None, "diagnostic", None),
     "today_usb_consumption_kwh": ("sensor", "Today USB Consumption", "kWh", "energy", "total_increasing", "mdi:usb", "diagnostic", None),
     "today_max_usb_a": ("sensor", "Today Max USB Current", "A", "current", "measurement", None, "diagnostic", None),
+    "today_max_usb_w": ("sensor", "Today Max USB Power", "W", "power", "measurement", None, "diagnostic", None),
 }
+
+# state key -> attribute name published on the battery entity's json_attr_t
+# topic. Kept as a mapping so the attribute keys can differ from the MQTT keys.
+BATTERY_ATTRIBUTES: dict[str, str] = {
+    "battery_soc": "battery_soc",
+    "battery_voltage": "battery_voltage",
+    "charge_power": "battery_charge_power",
+    "charge_voltage": "battery_charge_voltage",
+    "charge_current": "battery_charge_current",
+}
+
+BATTERY_ENTITY_KEY = "battery_soc"  # entity carrying the battery json attributes
 
 
 class MqttBridge:
@@ -169,6 +182,7 @@ class MqttBridge:
         topic = message.topic
         payload = (message.payload or b"").decode().strip().lower()
         if topic == self.pairing_set_topic:
+            log.info("MQTT command on %s: %r", topic, payload)
             if payload in ("paired", "on", "1", "true", "yes"):
                 if self._on_pair is not None:
                     self._on_pair(True)
@@ -180,6 +194,7 @@ class MqttBridge:
             return
         key = self._cmd_topics.get(topic)
         if key is not None:
+            log.info("MQTT command on %s: %r", topic, payload)
             if payload in ("on", "1", "true", "yes"):
                 if self._on_command is not None:
                     self._on_command(key, True)
@@ -234,6 +249,8 @@ class MqttBridge:
                 payload["pl_off"] = "off"
                 payload["stat_on"] = "on"
                 payload["stat_off"] = "off"
+            if key == BATTERY_ENTITY_KEY:
+                payload["json_attr_t"] = f"{self.base}/{key}/attributes"
             topic = f"{self._cfg.mqtt_discovery_prefix}/{component}/{self.node_id}/{key}/config"
             self._client.publish(topic, json.dumps(payload), retain=True)
         switch = {
@@ -279,3 +296,14 @@ class MqttBridge:
             if key not in SENSORS:
                 continue
             self._client.publish(f"{self.base}/{key}", value, retain=True)
+        attributes = {
+            name: values[state_key]
+            for state_key, name in BATTERY_ATTRIBUTES.items()
+            if state_key in values
+        }
+        if attributes:
+            self._client.publish(
+                f"{self.base}/{BATTERY_ENTITY_KEY}/attributes",
+                json.dumps(attributes),
+                retain=True,
+            )

@@ -85,6 +85,11 @@ limu_solar/<sn>/pv_voltage    → 21.09
 limu_solar/<sn>/availability  → online / offline
 ```
 
+The `battery_soc` entity ("Battery") also carries JSON attributes on
+`limu_solar/<sn>/battery_soc/attributes` (battery_soc, battery_voltage,
+battery_charge_power/voltage/current), so the battery info lives on one entity
+while the individual sensors remain available too.
+
 Home Assistant auto discovery registers 44 entities (sensors + binary sensors)
 under the configured discovery prefix, grouped into a single device keyed by the
 controller serial number, plus a **BLE Pairing switch** (see below). The Load,

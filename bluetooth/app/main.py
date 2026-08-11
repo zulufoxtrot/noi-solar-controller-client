@@ -16,6 +16,23 @@ from .mqtt_client import MqttBridge
 log = logging.getLogger(__name__)
 
 
+async def _disconnect_soft(client, timeout: float) -> None:
+    """Best-effort BLE disconnect that can never hang the caller.
+
+    BlueZ/D-Bus disconnects can stall (especially in containers sharing the
+    host's socket); a hung disconnect must not wedge the pairing state machine
+    or shutdown, so it is always bounded and swallowed.
+    """
+    if client is None:
+        return
+    try:
+        await asyncio.wait_for(client.disconnect(), timeout)
+    except asyncio.TimeoutError:
+        log.warning("BLE disconnect timed out after %.0fs", timeout)
+    except Exception as exc:  # noqa: BLE001 - link may already be gone
+        log.warning("BLE disconnect failed: %s", exc)
+
+
 async def poll_once(client) -> dict:
     """Read all verified public blocks and decode them into one state dict.
 
@@ -124,7 +141,12 @@ async def run(cfg: Config) -> None:
     connect_failures = 0
 
     async def pair_consumer() -> None:
-        """Apply pairing commands arriving from the MQTT broker (paho thread)."""
+        """Apply pairing commands arriving from the MQTT broker (paho thread).
+
+        State propagation happens BEFORE the BLE teardown and is exception-
+        isolated, so a slow/hung disconnect can never block the pairing state
+        machine (which would silently swallow later pair commands).
+        """
         nonlocal mqtt, client
         while True:
             pair = await pair_q.get()
@@ -132,13 +154,16 @@ async def run(cfg: Config) -> None:
                 continue
             box["paired"] = pair
             log.info("pairing command: %s", "pair" if pair else "unpair")
-            if not pair and client is not None:
-                await client.disconnect()
             if mqtt is not None:
-                mqtt.set_availability(pair)
-                mqtt.publish_pairing(pair)
-                mqtt.publish_ble_state("unpaired" if not pair else "connecting")
+                try:
+                    mqtt.set_availability(pair)
+                    mqtt.publish_pairing(pair)
+                    mqtt.publish_ble_state("unpaired" if not pair else "connecting")
+                except Exception as exc:  # noqa: BLE001 - keep the consumer alive
+                    log.error("pairing state publish failed: %s", exc)
             pair_changed.set()
+            if not pair:
+                await _disconnect_soft(client, cfg.ble_timeout)
 
     async def command_consumer() -> None:
         """Forward HA switch toggles to controller registers (paho thread)."""
@@ -202,11 +227,11 @@ async def run(cfg: Config) -> None:
                 await client.connect()
                 if stop.is_set():
                     log.info("shutdown during connect; releasing BLE link")
-                    await client.disconnect()
+                    await _disconnect_soft(client, cfg.ble_timeout)
                     break
                 if not box["paired"]:
                     log.info("unpair arrived during connect; releasing link")
-                    await client.disconnect()
+                    await _disconnect_soft(client, cfg.ble_timeout)
                     continue
                 connect_failures = 0
                 mqtt = await session(client, cfg, mqtt, box, stop)
@@ -257,7 +282,7 @@ async def run(cfg: Config) -> None:
         except asyncio.CancelledError:
             pass
         if client is not None:
-            await client.disconnect()
+            await _disconnect_soft(client, cfg.ble_timeout)
         if mqtt is not None:
             mqtt.close()
         log.info("shutdown complete")
