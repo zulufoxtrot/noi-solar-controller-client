@@ -209,11 +209,15 @@ class BleModbusClient:
         self._write_char = write_char
         await self._client.start_notify(notify_char, self._on_notify)
         self._connected = True
-        log.info("connected to %r (%s)", self.name, self.device.address)
-        # Do NOT present the PIN eagerly: telemetry reads are un-gated and an
-        # eager PIN write is acknowledged with EXC 0x04, which the controller
-        # counts toward its error-rate kick (forced disconnect after ~3-4 s).
-        # The PIN is only sent lazily when a read is actually auth-gated.
+        log.info("connected to %r (%s)", self.device.name, self.device.address)
+        # The controller re-gates the link right after (re)connect and drops
+        # links that do not present the PIN promptly (observed drop ~5-6 s in
+        # with no Modbus traffic, even from plain bluetoothctl). Present the PIN
+        # as the FIRST Modbus frame, before any telemetry read. The write is
+        # acknowledged with 0x02/0x04 (or no ack) yet still honoured, and the
+        # unlock persists across reconnects, so this is safe and idempotent.
+        # Lazy re-present remains as a backstop if a read is still gated.
+        await self._unlock(timeout=min(self.read_timeout, 2.0))
 
     async def disconnect(self) -> None:
         if self._client is not None:
@@ -239,9 +243,10 @@ class BleModbusClient:
             self._expecting = False
             raise
 
-    async def _wait_frame(self) -> int:
+    async def _wait_frame(self, timeout: float | None = None) -> int:
+        wait = self.read_timeout if timeout is None else timeout
         loop = asyncio.get_running_loop()
-        deadline = loop.time() + self.read_timeout
+        deadline = loop.time() + wait
         try:
             while True:
                 exp = modbus.expected_response_length(self._buf)
@@ -250,7 +255,7 @@ class BleModbusClient:
                 remaining = deadline - loop.time()
                 if remaining <= 0:
                     raise TimeoutError(
-                        f"request timed out after {self.read_timeout}s"
+                        f"request timed out after {wait}s"
                     )
                 try:
                     await asyncio.wait_for(self._data.wait(), remaining)
@@ -260,14 +265,15 @@ class BleModbusClient:
         finally:
             self._expecting = False
 
-    async def _unlock(self) -> None:
+    async def _unlock(self, timeout: float | None = None) -> None:
         """Present the PIN as ASCII regs @ 0x0400 (FC10). The device errors 0x02
         (sometimes 0x04) on the write yet still honours it, so any response is
-        treated as success. Called lazily when a read is auth-gated."""
+        treated as success. Called as the first Modbus frame after connect; also
+        re-called lazily when a read is still auth-gated."""
         log.info("presenting BLE PIN %r to %#06x", self.pin, self.PIN_REG)
         await self._send(modbus.build_write_multi(self.PIN_REG, self._ascii_regs(self.pin)))
         try:
-            await self._wait_frame()
+            await self._wait_frame(timeout)
         except (modbus.ModbusError, TimeoutError):
             pass  # 0x02/0x04 rejection / no ack is expected
         self._unlocked = True

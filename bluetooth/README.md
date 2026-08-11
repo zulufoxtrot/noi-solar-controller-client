@@ -137,11 +137,12 @@ limu_solar/<sn>/availability_bridge   → online / offline    (switch availabili
 * Only the exact documented public ranges are read as blocks; a block read fails
   entirely (exception `0x02`) if any register in it is invalid.
 * The config (`0x0400+`) and — on reconnects — the whole link are password-gated:
-  reads return exception `0x04`. The bridge **presents the PIN lazily** — once,
-  when a read actually comes back gated — by writing the ASCII PIN to `0x0400`
-  via FC10 (the device replies `0x02`/`0x04` to that write yet honours it). It
-  avoids the eager write so a fresh link never trips the device's error-rate
-  kick. `BLE_PIN` overrides the default `000000`.
+  reads return exception `0x04`. The bridge **presents the PIN as the first
+  Modbus frame after every connect** (the controller re-gates on reconnects and
+  drops links that don't present the PIN promptly) by writing the ASCII PIN to
+  `0x0400` via FC10 — the device replies `0x02`/`0x04` to that write yet honours
+  it — and re-presents it lazily if a read is still gated. `BLE_PIN` overrides
+  the default `000000`.
 
 ## Open items
 
