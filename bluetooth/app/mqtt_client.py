@@ -68,20 +68,20 @@ SENSORS: dict[str, tuple] = {
     "fan_speed": ("sensor", "Fan Speed", None, "speed", "measurement", "mdi:fan", None, None),
     # lifetime / today statistics (0x0300 block)
     "total_runtime_s": ("sensor", "Total Runtime", "s", "duration", "total_increasing", "mdi:timer-sand", "diagnostic", None),
-    "total_generation_kwh": ("sensor", "Total Generation", "kWh", "energy", "total_increasing", "mdi:solar-power", None, None),
-    "total_consumption_kwh": ("sensor", "Total Consumption", "kWh", "energy", "total_increasing", "mdi:power-plug", None, None),
+    "total_generation_kwh": ("sensor", "Total Generation", "kWh", "energy", "total_increasing", "mdi:solar-power", "diagnostic", None),
+    "total_consumption_kwh": ("sensor", "Total Consumption", "kWh", "energy", "total_increasing", "mdi:power-plug", "diagnostic", None),
     "full_charge_count": ("sensor", "Full Charge Count", None, None, "total_increasing", "mdi:battery-charging", "diagnostic", None),
     "over_discharge_count": ("sensor", "Over-Discharge Count", None, None, "total_increasing", "mdi:battery-alert", "diagnostic", None),
-    "today_generation_kwh": ("sensor", "Today's Generation", "kWh", "energy", "total_increasing", "mdi:solar-power", None, None),
+    "today_generation_kwh": ("sensor", "Today's Generation", "kWh", "energy", "total_increasing", "mdi:solar-power", "diagnostic", None),
     "today_max_pv_v": ("sensor", "Today Max PV Voltage", "V", "voltage", "measurement", None, "diagnostic", None),
     "today_max_pv_a": ("sensor", "Today Max PV Current", "A", "current", "measurement", None, "diagnostic", None),
     "today_max_pv_w": ("sensor", "Today Max PV Power", "W", "power", "measurement", None, "diagnostic", None),
     "today_max_batt_v": ("sensor", "Today Max Battery Voltage", "V", "voltage", "measurement", None, "diagnostic", None),
     "today_min_batt_v": ("sensor", "Today Min Battery Voltage", "V", "voltage", "measurement", None, "diagnostic", None),
-    "today_consumption_kwh": ("sensor", "Today's Consumption", "kWh", "energy", "total_increasing", "mdi:power-plug", None, None),
+    "today_consumption_kwh": ("sensor", "Today's Consumption", "kWh", "energy", "total_increasing", "mdi:power-plug", "diagnostic", None),
     "today_max_load_a": ("sensor", "Today Max Load Current", "A", "current", "measurement", None, "diagnostic", None),
     "today_max_load_w": ("sensor", "Today Max Load Power", "W", "power", "measurement", None, "diagnostic", None),
-    "today_usb_consumption_kwh": ("sensor", "Today USB Consumption", "kWh", "energy", "total_increasing", "mdi:usb", None, None),
+    "today_usb_consumption_kwh": ("sensor", "Today USB Consumption", "kWh", "energy", "total_increasing", "mdi:usb", "diagnostic", None),
     "today_max_usb_a": ("sensor", "Today Max USB Current", "A", "current", "measurement", None, "diagnostic", None),
 }
 
@@ -245,7 +245,6 @@ class MqttBridge:
             "avty_t": self.bridge_availability_topic,
             "dev": self._device,
             "icon": "mdi:bluetooth",
-            "ent_cat": "diagnostic",
         }
         switch_topic = (
             f"{self._cfg.mqtt_discovery_prefix}/switch/{self.node_id}/pairing/config"
