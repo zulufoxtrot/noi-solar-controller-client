@@ -47,11 +47,18 @@ Subscribing to a write-only char fails with `CBATTErrorDomain 6 "request is not 
 * **Presenting the PIN** = FC 0x10, ASCII PIN packed 2 chars per register (regs `[0x3030, 0x3030, 0x3030]` for `"000000"`), written to **`0x0400`**. The device answers the write itself with **exception `0x02`** (illegal address) while still accepting it — treat the `0x02` response as success, not a failure. Verified: after that write, gated/telemetry reads succeed from the same link. Frame: `FF 10 04 00 00 03 06 30 30 30 30 30 30 20 FB`.
   * The unlocked state **persists across BLE reconnects**; it resets only on a power cycle.
 * The app has `_sendPassword` (in `usb_settings_viewmodel.dart` context) and a "Bluetooth Password" settings UI; the controller's fault bitmap/event log even carry "wrong password" flags (event 128, byte2 bit). Ground truth of the app's exact frame: `ble_sniff.js` Frida hook (needs root).
-* PoC: `app/` presents the PIN immediately after every connect (BLE link, incl. reconnects) — FC10 ASCII PIN to `0x0400` — and re-presents it once if a read is still gated, then retries (`BLE_PIN` env, default `000000`).
+* PoC: `app/` presents the PIN **lazily** — only once, when a read actually comes back auth-gated (exception `0x04`) — via FC10 ASCII PIN to `0x0400` (`BLE_PIN` env, default `000000`). It does NOT write it eagerly on connect: the device answers the PIN write with `0x02`/`0x04`, which its error-rate kick (forced disconnect after ~4 s on error bursts) would count against a fresh link.
 
 ## ✅ Blocker cleared 2026-08-10 (power cycle)
 
 The Aug-02 "hung state" was resolved by a power cycle (battery/PV disconnect-reconnect). Live GATT telemetry is fully verifiable again from the Mac: full register dump of 0x00A0/0x0080/0x000A decodes correctly (see above). The SBC (colombis, BlueZ) also connects fine; the earlier "Request attribute has encountered an unlikely error" was the hung link, not the stack.
+
+## Reconnecting after a container restart (stale BlueZ link)
+
+* Because the bridge runs in a container that shares the **host's BlueZ** (`/var/run/dbus`), a HCI connection is owned by the host daemon. If the previous process died without disconnecting (hard restart, killed mid-call, D-Bus disconnect stalling past the timeout), BlueZ **keeps the link up even after the container restarts**.
+* This device is **single-link and stops advertising while connected**, so a leftover link makes it invisible to scans: the bridge loops on `no controller found` even though the controller is fine.
+* The bridge now recovers automatically: before every scan it asks BlueZ to release the controller by address (`org.bluez.Device1.Disconnect`), and after 3 consecutive failed discoveries it escalates to `org.bluez.Adapter1.RemoveDevice` (forgets the device, clearing any stale GATT cache — the fix for `failed to discover services`). Expect at most one release + one scan cycle (~15–40 s) of downtime after an unclean restart.
+* If the controller still never advertises after repeated releases, it is likely in the firmware "hung state" above — power-cycle the controller (disconnect/reconnect battery or PV). The bridge logs a warning telling you exactly that after ~6 failed scans.
 
 ## Tooling — `ble_modbus.py` (this repo)
 

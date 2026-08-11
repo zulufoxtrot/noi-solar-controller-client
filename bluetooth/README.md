@@ -44,6 +44,13 @@ docker compose up -d --build
 broker. **Docker Desktop on macOS cannot pass Bluetooth through** — run
 natively there.
 
+If a **container restart** leaves the bridge looping on `no controller found`:
+the previous process died while the host BlueZ still held the BLE link (the
+controller is single-link and stops advertising while connected). The bridge now
+auto-recovers — it releases/removes the stale BlueZ device before scanning — but
+if the controller still never shows up after repeated releases, power-cycle it
+(see `BLE.md` → "Reconnecting after a container restart").
+
 ## Configuration (env vars)
 
 | Variable | Default | Meaning |
@@ -130,10 +137,11 @@ limu_solar/<sn>/availability_bridge   → online / offline    (switch availabili
 * Only the exact documented public ranges are read as blocks; a block read fails
   entirely (exception `0x02`) if any register in it is invalid.
 * The config (`0x0400+`) and — on reconnects — the whole link are password-gated:
-  reads return exception `0x04`. The bridge **presents the PIN immediately after
-  every connect** by writing the ASCII PIN to `0x0400` via FC10 (the device
-  replies `0x02`/`0x04` to that write yet honours it), and re-presents it lazily
-  if a read is still gated. `BLE_PIN` overrides the default `000000`.
+  reads return exception `0x04`. The bridge **presents the PIN lazily** — once,
+  when a read actually comes back gated — by writing the ASCII PIN to `0x0400`
+  via FC10 (the device replies `0x02`/`0x04` to that write yet honours it). It
+  avoids the eager write so a fresh link never trips the device's error-rate
+  kick. `BLE_PIN` overrides the default `000000`.
 
 ## Open items
 

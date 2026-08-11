@@ -67,6 +67,70 @@ async def discover_controller(
     return device
 
 
+def _bluez_adapter(device) -> str:
+    """Best-guess BlueZ adapter name (e.g. 'hci0') from a device's D-Bus path."""
+    path = getattr(device, "details", {}) or {}
+    parts = str(path.get("path", "")).split("/")
+    return parts[3] if len(parts) > 3 else ""
+
+
+async def release_stale_link(
+    address: str, adapter: str = "", *, remove: bool = False
+) -> bool:
+    """Best-effort release of a controller link BlueZ may still hold.
+
+    If a previous client died without calling Disconnect (e.g. a hard container
+    restart), the host's BlueZ keeps the HCI connection up. This controller is
+    single-link and stops advertising while connected, so a leftover link makes
+    it invisible to scans forever. Disconnecting the device lets it resume
+    advertising; with `remove=True` the device is also forgotten from BlueZ,
+    clearing any stale GATT cache (which fixes "failed to discover services").
+
+    Returns True if BlueZ reported the device connected before we acted.
+    Never raises; a no-op without an address or when BlueZ is unavailable
+    (e.g. non-Linux, where the lazy dbus_fast import fails).
+    """
+    if not address:
+        return False
+    try:
+        from bleak.backends.bluezdbus.manager import get_global_bluez_manager
+        from bleak.backends.bluezdbus import defs
+        from dbus_fast import Message
+
+        manager = await get_global_bluez_manager()
+        adapter_path = (
+            f"/org/bluez/{adapter}" if adapter else manager.get_default_adapter()
+        )
+        device_path = f"{adapter_path}/dev_{address.replace(':', '_').upper()}"
+        connected = manager.is_connected(device_path)
+        if remove:
+            log.info("forgetting controller %s (%s) from BlueZ", address, device_path)
+            await manager._bus.call(  # noqa: SLF001 - same pattern as bleak's own client
+                Message(
+                    destination=defs.BLUEZ_SERVICE,
+                    interface=defs.ADAPTER_INTERFACE,
+                    path=adapter_path,
+                    member="RemoveDevice",
+                    signature="o",
+                    body=[device_path],
+                )
+            )
+        elif connected:
+            log.info("releasing stale BlueZ link to %s (%s)", address, device_path)
+            await manager._bus.call(  # noqa: SLF001 - same pattern as bleak's own client
+                Message(
+                    destination=defs.BLUEZ_SERVICE,
+                    interface=defs.DEVICE_INTERFACE,
+                    path=device_path,
+                    member="Disconnect",
+                )
+            )
+        return connected
+    except Exception as exc:  # noqa: BLE001 - best-effort, diagnostics only
+        log.debug("stale-link cleanup skipped: %s", exc)
+        return False
+
+
 class BleModbusClient:
     """Async Modbus-RTU-over-BLE client (one outstanding request at a time).
 
@@ -121,39 +185,8 @@ class BleModbusClient:
         self._buf.extend(data)
         self._data.set()
 
-    async def _drop_stale_link(self) -> None:
-        """Release any lingering BlueZ connection to the controller.
-
-        If a previous client crashed without calling Disconnect, BlueZ keeps the
-        HCI link up. The controller is single-link (it stops advertising while
-        connected), so a leftover link blocks us from scanning/connecting.
-        """
-        try:
-            from bleak.backends.bluezdbus.manager import get_global_bluez_manager
-            from bleak.backends.bluezdbus import defs
-            from dbus_fast import Message
-
-            manager = await get_global_bluez_manager()
-            device_path = None
-            for p in getattr(manager, "_device_paths", []) or []:
-                if p.endswith(f"dev_{self.device.address.replace(':', '_')}"):
-                    device_path = p
-            if device_path is None or not manager.is_connected(device_path):
-                return
-            log.info("dropping stale BlueZ link to %s", self.device.address)
-            await manager._bus.call(
-                Message(
-                    destination=defs.BLUEZ_SERVICE,
-                    interface=defs.DEVICE_INTERFACE,
-                    path=device_path,
-                    member="Disconnect",
-                )
-            )
-        except Exception as exc:  # noqa: BLE001 - best-effort
-            log.debug("stale-link cleanup skipped: %s", exc)
-
     async def connect(self) -> None:
-        await self._drop_stale_link()
+        await release_stale_link(self.device.address, _bluez_adapter(self.device))
         self._client = BleakClient(
             self.device,
             disconnected_callback=self._on_disconnect,

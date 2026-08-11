@@ -9,7 +9,12 @@ import logging
 import signal
 
 from . import registers
-from .ble_client import BleModbusClient, SimulatedModbusClient, discover_controller
+from .ble_client import (
+    BleModbusClient,
+    SimulatedModbusClient,
+    discover_controller,
+    release_stale_link,
+)
 from .config import Config
 from .mqtt_client import MqttBridge
 
@@ -156,6 +161,10 @@ async def run(cfg: Config) -> None:
     client = None
     device = None
     connect_failures = 0
+    # address we can always reconnect to: configured one, or the last device we
+    # actually discovered (never cleared when `device` is dropped for rediscovery)
+    last_address = cfg.controller_address or None
+    scan_failures = 0
 
     async def pair_consumer() -> None:
         """Apply pairing commands arriving from the MQTT broker (paho thread).
@@ -222,12 +231,25 @@ async def run(cfg: Config) -> None:
                     log.info("pair command: reconnecting to controller")
                     device = None
                     connect_failures = 0
+                    scan_failures = 0
                 continue
             try:
                 if cfg.simulate:
                     client = SimulatedModbusClient()
                 else:
                     if device is None:
+                        # A previous process may have died without disconnecting,
+                        # leaving the host BlueZ holding the HCI link. The
+                        # controller stops advertising while connected, so a
+                        # leftover link makes it undiscoverable forever — release
+                        # it before every scan, escalating to a full BlueZ
+                        # "remove" after repeated discovery failures.
+                        if last_address:
+                            await release_stale_link(
+                                last_address,
+                                cfg.ble_adapter,
+                                remove=scan_failures >= 3,
+                            )
                         device = await discover_controller(
                             cfg.controller_name_prefix,
                             address=cfg.controller_address,
@@ -236,6 +258,8 @@ async def run(cfg: Config) -> None:
                         )
                         if device is None:
                             raise RuntimeError("no controller found, retrying")
+                        last_address = device.address
+                        scan_failures = 0
                     client = BleModbusClient(
                         device, cfg.ble_timeout, cfg.read_timeout, pin=cfg.ble_pin
                     )
@@ -286,6 +310,15 @@ async def run(cfg: Config) -> None:
                     log.info("rediscovering controller after %d failures", connect_failures)
                     device = None
                     connect_failures = 0
+                if device is None:
+                    scan_failures += 1
+                    if scan_failures >= 6 and scan_failures % 6 == 0:
+                        log.warning(
+                            "controller %s still not advertising after %d scans; "
+                            "if it keeps hiding, power-cycle it (it stops "
+                            "advertising while it holds a stale BLE link)",
+                            last_address, scan_failures,
+                        )
                 try:
                     await asyncio.wait_for(stop.wait(), cfg.retry_interval)
                 except asyncio.TimeoutError:
