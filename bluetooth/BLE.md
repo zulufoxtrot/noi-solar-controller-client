@@ -59,6 +59,7 @@ The Aug-02 "hung state" was resolved by a power cycle (battery/PV disconnect-rec
 * This device is **single-link and stops advertising while connected**, so a leftover link makes it invisible to scans: the bridge loops on `no controller found` even though the controller is fine.
 * The bridge now recovers automatically: before every scan it asks BlueZ to release the controller by address (`org.bluez.Device1.Disconnect`), and after 3 consecutive failed discoveries it escalates to `org.bluez.Adapter1.RemoveDevice` (forgets the device, clearing any stale GATT cache — the fix for `failed to discover services`). Expect at most one release + one scan cycle (~15–40 s) of downtime after an unclean restart.
 * If the controller still never advertises after repeated releases, it is likely in the firmware "hung state" above — power-cycle the controller (disconnect/reconnect battery or PV). The bridge logs a warning telling you exactly that after ~6 failed scans.
+* **Hung GATT variant (Aug-11)**: the controller advertises and accepts connections, but its GATT stack never answers service discovery (no GATT service objects appear in the BlueZ tree), and the link dies ~5 s in (supervision timeout) — `failed to discover services, device disconnected`. Reproducible from plain `bluetoothctl` and with bleak, so it is not client-side. Same fix: power-cycle the controller. The bridge's eager-PIN + GATT-cache-clearing recovery then reconnects automatically once the controller is healthy.
 
 ## Tooling — `ble_modbus.py` (this repo)
 
