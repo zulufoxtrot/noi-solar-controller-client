@@ -308,8 +308,17 @@ async def run(cfg: Config) -> None:
                     continue
                 if connect_failures >= 3:
                     log.info("rediscovering controller after %d failures", connect_failures)
+                    had_device = device is not None
                     device = None
                     connect_failures = 0
+                    if had_device and last_address:
+                        # The controller was found but keeps dropping during/after
+                        # connect; a stale BlueZ GATT cache can make every new
+                        # connection fail service discovery. Force BlueZ to forget
+                        # the device so the next scan re-discovers from scratch.
+                        await release_stale_link(
+                            last_address, cfg.ble_adapter, remove=True
+                        )
                 if device is None:
                     scan_failures += 1
                     if scan_failures >= 6 and scan_failures % 6 == 0:
