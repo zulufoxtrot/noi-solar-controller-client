@@ -37,6 +37,7 @@ class Config:
     # --- behaviour ---
     poll_interval: float = 30.0
     retry_interval: float = 15.0
+    retry_backoff_max: float = 300.0  # cap for exponential backoff after repeated failures
     device_name: str = "Limu Solar Controller"  # display name in HA
     simulate: bool = False  # fake telemetry, no BLE (test MQTT path)
     log_level: str = "INFO"
@@ -66,6 +67,9 @@ class Config:
             read_timeout=float(_env("READ_TIMEOUT", str(cls.read_timeout))),
             poll_interval=float(_env("POLL_INTERVAL", str(cls.poll_interval))),
             retry_interval=float(_env("RETRY_INTERVAL", str(cls.retry_interval))),
+            retry_backoff_max=float(
+                _env("RETRY_BACKOFF_MAX", str(cls.retry_backoff_max))
+            ),
             device_name=_env("DEVICE_NAME", cls.device_name),
             simulate=_bool("SIMULATE", False),
             log_level=os.environ.get("LOG_LEVEL", cls.log_level).upper(),

@@ -38,6 +38,18 @@ async def _disconnect_soft(client, timeout: float) -> None:
         log.warning("BLE disconnect failed: %s", exc)
 
 
+def _retry_backoff(retry_interval: float, streak: int, cap: float) -> float:
+    """Retry wait with exponential backoff, capped at `cap`.
+
+    A controller stuck in its error-rate kick state needs minutes of quiet to
+    recover; hammering it every `retry_interval` keeps it kicked. Grow the wait
+    with each consecutive failure (1x, 2x, 4x, ...) up to `cap` seconds.
+    """
+    if streak <= 1:
+        return retry_interval
+    return min(retry_interval * (2 ** min(streak - 1, 8)), cap)
+
+
 async def _log_stats_diagnostic(client) -> None:
     """One-shot INFO log of the raw statistics registers (0x0300-0x0313) so the
     device's exact output can be cross-checked against the decoded entities
@@ -165,6 +177,7 @@ async def run(cfg: Config) -> None:
     # actually discovered (never cleared when `device` is dropped for rediscovery)
     last_address = cfg.controller_address or None
     scan_failures = 0
+    fail_streak = 0  # consecutive failed connect cycles; drives the retry backoff
 
     async def pair_consumer() -> None:
         """Apply pairing commands arriving from the MQTT broker (paho thread).
@@ -275,6 +288,7 @@ async def run(cfg: Config) -> None:
                     await _disconnect_soft(client, cfg.ble_timeout)
                     continue
                 connect_failures = 0
+                fail_streak = 0
                 mqtt = await session(client, cfg, mqtt, box, stop)
                 if stop.is_set():
                     break
@@ -291,8 +305,11 @@ async def run(cfg: Config) -> None:
                     log.info("rediscovering controller after %d failures", connect_failures)
                     device = None
                     connect_failures = 0
+                fail_streak += 1
+                wait = _retry_backoff(cfg.retry_interval, fail_streak, cfg.retry_backoff_max)
+                log.info("retrying in %.0fs (consecutive failures: %d)", wait, fail_streak)
                 try:
-                    await asyncio.wait_for(stop.wait(), cfg.retry_interval)
+                    await asyncio.wait_for(stop.wait(), wait)
                 except asyncio.TimeoutError:
                     pass
                 continue
@@ -328,8 +345,11 @@ async def run(cfg: Config) -> None:
                             "advertising while it holds a stale BLE link)",
                             last_address, scan_failures,
                         )
+                fail_streak += 1
+                wait = _retry_backoff(cfg.retry_interval, fail_streak, cfg.retry_backoff_max)
+                log.info("retrying in %.0fs (consecutive failures: %d)", wait, fail_streak)
                 try:
-                    await asyncio.wait_for(stop.wait(), cfg.retry_interval)
+                    await asyncio.wait_for(stop.wait(), wait)
                 except asyncio.TimeoutError:
                     pass
     finally:
