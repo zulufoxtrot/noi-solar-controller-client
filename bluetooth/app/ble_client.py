@@ -101,6 +101,7 @@ class BleModbusClient:
         self._lock = asyncio.Lock()
         self._connected = False
         self._unlocked = False
+        self._expecting: bool | None = False  # True while a response is awaited
 
     @property
     def name(self) -> str:
@@ -115,10 +116,44 @@ class BleModbusClient:
         self._connected = False
 
     def _on_notify(self, _char, data: bytearray) -> None:
+        if self._expecting is not True:
+            return  # unsolicited/stale response, drop it
         self._buf.extend(data)
         self._data.set()
 
+    async def _drop_stale_link(self) -> None:
+        """Release any lingering BlueZ connection to the controller.
+
+        If a previous client crashed without calling Disconnect, BlueZ keeps the
+        HCI link up. The controller is single-link (it stops advertising while
+        connected), so a leftover link blocks us from scanning/connecting.
+        """
+        try:
+            from bleak.backends.bluezdbus.manager import get_global_bluez_manager
+            from bleak.backends.bluezdbus import defs
+            from dbus_fast import Message
+
+            manager = await get_global_bluez_manager()
+            device_path = None
+            for p in getattr(manager, "_device_paths", []) or []:
+                if p.endswith(f"dev_{self.device.address.replace(':', '_')}"):
+                    device_path = p
+            if device_path is None or not manager.is_connected(device_path):
+                return
+            log.info("dropping stale BlueZ link to %s", self.device.address)
+            await manager._bus.call(
+                Message(
+                    destination=defs.BLUEZ_SERVICE,
+                    interface=defs.DEVICE_INTERFACE,
+                    path=device_path,
+                    member="Disconnect",
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - best-effort
+            log.debug("stale-link cleanup skipped: %s", exc)
+
     async def connect(self) -> None:
+        await self._drop_stale_link()
         self._client = BleakClient(
             self.device,
             disconnected_callback=self._on_disconnect,
@@ -142,10 +177,10 @@ class BleModbusClient:
         await self._client.start_notify(notify_char, self._on_notify)
         self._connected = True
         log.info("connected to %r (%s)", self.name, self.device.address)
-        # The controller re-gates the link right after connect (0x04), especially
-        # on a reconnect/re-pair, so present the PIN as soon as the link is up.
-        # Unlock persists across reconnects, so re-sending is harmless/idempotent.
-        await self._unlock()
+        # Do NOT present the PIN eagerly: telemetry reads are un-gated and an
+        # eager PIN write is acknowledged with EXC 0x04, which the controller
+        # counts toward its error-rate kick (forced disconnect after ~3-4 s).
+        # The PIN is only sent lazily when a read is actually auth-gated.
 
     async def disconnect(self) -> None:
         if self._client is not None:
@@ -162,32 +197,40 @@ class BleModbusClient:
     async def _send(self, frame: bytes) -> None:
         if not self.is_connected:
             raise ConnectionError("not connected")
+        self._expecting = True
         self._buf.clear()
         self._data.clear()
-        await self._client.write_gatt_char(self._write_char, frame, response=False)
+        try:
+            await self._client.write_gatt_char(self._write_char, frame, response=False)
+        except Exception:
+            self._expecting = False
+            raise
 
     async def _wait_frame(self) -> int:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self.read_timeout
-        while True:
-            exp = modbus.expected_response_length(self._buf)
-            if exp is not None and len(self._buf) >= exp:
-                return exp
-            remaining = deadline - loop.time()
-            if remaining <= 0:
-                raise TimeoutError(
-                    f"request timed out after {self.read_timeout}s"
-                )
-            try:
-                await asyncio.wait_for(self._data.wait(), remaining)
-                self._data.clear()
-            except asyncio.TimeoutError:
-                pass  # re-check buffer/deadline
+        try:
+            while True:
+                exp = modbus.expected_response_length(self._buf)
+                if exp is not None and len(self._buf) >= exp:
+                    return exp
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    raise TimeoutError(
+                        f"request timed out after {self.read_timeout}s"
+                    )
+                try:
+                    await asyncio.wait_for(self._data.wait(), remaining)
+                    self._data.clear()
+                except asyncio.TimeoutError:
+                    pass  # re-check buffer/deadline
+        finally:
+            self._expecting = False
 
     async def _unlock(self) -> None:
         """Present the PIN as ASCII regs @ 0x0400 (FC10). The device errors 0x02
         (sometimes 0x04) on the write yet still honours it, so any response is
-        treated as success. Called ASAP after every connect."""
+        treated as success. Called lazily when a read is auth-gated."""
         log.info("presenting BLE PIN %r to %#06x", self.pin, self.PIN_REG)
         await self._send(modbus.build_write_multi(self.PIN_REG, self._ascii_regs(self.pin)))
         try:
