@@ -41,9 +41,13 @@ async def poll_once(client) -> dict:
     return state
 
 
-async def session(client, cfg: Config, mqtt: MqttBridge | None, box: dict) -> MqttBridge:
+async def session(
+    client, cfg: Config, mqtt: MqttBridge | None, box: dict, stop: asyncio.Event
+) -> MqttBridge:
     """One paired session: sysinfo + discovery, then poll until an unpair
-    command arrives or the BLE link drops. Returns the (possibly new) bridge."""
+    command arrives, the BLE link drops, or shutdown is requested. Returns the
+    (possibly new) bridge. `stop` is observed so SIGTERM unwinds to a clean
+    `client.disconnect()` instead of leaving the BLE link held."""
     if mqtt is None:
         sysinfo = registers.decode_sysinfo(
             await client.read_holding(*registers.BLOCK_SYSINFO)
@@ -64,7 +68,7 @@ async def session(client, cfg: Config, mqtt: MqttBridge | None, box: dict) -> Mq
     mqtt.publish_pairing(True)
     mqtt.publish_ble_state("connected")
 
-    while box["paired"] and client.is_connected:
+    while box["paired"] and client.is_connected and not stop.is_set():
         state = await poll_once(client)
         log.info(
             "PV %.2f V / %.1f W | batt %.2f V / %.1f%% | charge %s %.1f W | %s",
@@ -74,11 +78,20 @@ async def session(client, cfg: Config, mqtt: MqttBridge | None, box: dict) -> Mq
         )
         mqtt.publish_state(state)
         box["pair_changed"].clear()
+        stop_task = asyncio.create_task(stop.wait())
+        change_task = asyncio.create_task(box["pair_changed"].wait())
         try:
-            await asyncio.wait_for(box["pair_changed"].wait(), cfg.poll_interval)
-        except asyncio.TimeoutError:
-            pass
-    if box["paired"]:
+            _, pending = await asyncio.wait(
+                {stop_task, change_task},
+                timeout=cfg.poll_interval,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        finally:
+            for task in pending:
+                task.cancel()
+    if stop.is_set():
+        log.info("session stopped: releasing BLE link")
+    elif box["paired"]:
         log.info("session ended: BLE link dropped")
     else:
         log.info("session released: unpaired")
@@ -187,12 +200,18 @@ async def run(cfg: Config) -> None:
                 if mqtt is not None:
                     mqtt.publish_ble_state("connecting")
                 await client.connect()
+                if stop.is_set():
+                    log.info("shutdown during connect; releasing BLE link")
+                    await client.disconnect()
+                    break
                 if not box["paired"]:
                     log.info("unpair arrived during connect; releasing link")
                     await client.disconnect()
                     continue
                 connect_failures = 0
-                mqtt = await session(client, cfg, mqtt, box)
+                mqtt = await session(client, cfg, mqtt, box, stop)
+                if stop.is_set():
+                    break
                 if not box["paired"]:
                     log.info("session released by pairing toggle")
                     continue
