@@ -64,6 +64,9 @@ SENSORS: dict[str, tuple] = {
     "usb_current": ("sensor", "USB Current", "A", "current", "measurement", None, None, None),
     "usb_power": ("sensor", "USB Power", "W", "power", "measurement", None, None, None),
     "controller_temp_c": ("sensor", "Controller Temperature", "°C", "temperature", "measurement", "mdi:thermometer", None, None),
+    "ble_pairing_state": ("sensor", "BLE Pairing State", None, "connectivity", None, "mdi:bluetooth", "diagnostic",
+                          ["connecting", "connected", "unpaired", "disconnected"]),
+    "battery_rated_voltage": ("sensor", "Battery Rated Voltage", "V", "voltage", None, "mdi:battery", "diagnostic", None),
     "fan_switch": ("switch", "Fan Switch", None, None, None, "mdi:fan", None, None),
     "fan_speed": ("sensor", "Fan Speed", None, "speed", "measurement", "mdi:fan", None, None),
     # lifetime / today statistics (0x0300 block)
@@ -245,6 +248,7 @@ class MqttBridge:
             "avty_t": self.bridge_availability_topic,
             "dev": self._device,
             "icon": "mdi:bluetooth",
+            "ent_cat": "config",
         }
         switch_topic = (
             f"{self._cfg.mqtt_discovery_prefix}/switch/{self.node_id}/pairing/config"
@@ -266,6 +270,9 @@ class MqttBridge:
         self._client.publish(
             self.pairing_topic, "paired" if paired else "unpaired", retain=True
         )
+
+    def publish_ble_state(self, state: str) -> None:
+        self._client.publish(f"{self.base}/ble_pairing_state", state, retain=True)
 
     def publish_state(self, values: dict) -> None:
         for key, value in values.items():

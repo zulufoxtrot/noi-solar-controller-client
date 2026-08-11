@@ -79,14 +79,23 @@ def decode_sysinfo(regs: list[int]) -> dict:
 def decode_running(regs: list[int]) -> dict:
     """Decode the 0x00A0-0x00AF block (16 registers) -> telemetry dict.
 
-    Battery rated voltage: register 0x00A9 reads 1 with no app equivalent, so it
-    is intentionally NOT published (undecodable). Charge power/current are signed
+    Battery rated voltage is derived from the battery type register (0x00A8)
+    rather than 0x00A9, which reads 1 with no app equivalent. For lithium
+    (LiFePO4) cells at 3.2 V each and lead-acid cells at 2.0 V each, the
+    rated voltage = cell_count * cell_voltage. Charge power/current are signed
     (a discharge shows as a negative raw word, e.g. 0xFFC8 = -56 => -5.6 W).
     """
     batt_type = regs[0x00A8 - 0x00A0]
     batt_kind = {(batt_type >> 14) & 0x3: None, 1: "lead_acid", 2: "lithium"}.get(
         (batt_type >> 14) & 0x3, "unknown"
     )
+    batt_cells = batt_type & 0xFF
+    if batt_kind == "lithium":
+        rated_v = round(batt_cells * 3.2, 1)
+    elif batt_kind == "lead_acid":
+        rated_v = round(batt_cells * 2.0, 1)
+    else:
+        rated_v = None
     phase_reg = regs[0x00AC - 0x00A0]
     return {
         "running_state": RUNNING_STATES.get(regs[0x00A0 - 0x00A0], "unknown"),
@@ -94,7 +103,8 @@ def decode_running(regs: list[int]) -> dict:
         "pv_voltage": round(regs[0x00A5 - 0x00A0] * 0.01, 2),
         "pv_current": round(regs[0x00A6 - 0x00A0] * 0.1, 2),
         "pv_power": round(regs[0x00A7 - 0x00A0] * 0.1, 2),
-        "battery_type": f"{batt_kind or 'unknown'} x{batt_type & 0xFF}",
+        "battery_type": f"{batt_kind or 'unknown'} x{batt_cells}",
+        "battery_rated_voltage": rated_v,
         "battery_voltage": round(regs[0x00AA - 0x00A0] * 0.01, 2),
         "battery_soc": round(regs[0x00AB - 0x00A0] * SOC_SCALE, 1),
         "charge_phase": CHARGE_PHASES.get((phase_reg >> 8) & 0xFF, "unknown"),

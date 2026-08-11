@@ -62,6 +62,7 @@ async def session(client, cfg: Config, mqtt: MqttBridge | None, box: dict) -> Mq
         mqtt.publish_discovery()
     mqtt.set_availability(True)
     mqtt.publish_pairing(True)
+    mqtt.publish_ble_state("connected")
 
     while box["paired"] and client.is_connected:
         state = await poll_once(client)
@@ -123,6 +124,7 @@ async def run(cfg: Config) -> None:
             if mqtt is not None:
                 mqtt.set_availability(pair)
                 mqtt.publish_pairing(pair)
+                mqtt.publish_ble_state("unpaired" if not pair else "connecting")
             pair_changed.set()
 
     async def command_consumer() -> None:
@@ -149,6 +151,7 @@ async def run(cfg: Config) -> None:
                 if mqtt is not None:
                     mqtt.set_availability(False)
                     mqtt.publish_pairing(False)
+                    mqtt.publish_ble_state("unpaired")
                 log.info("unpaired: holding BLE link off, waiting for a pair command")
                 while not stop.is_set() and not box["paired"]:
                     pair_changed.clear()
@@ -181,6 +184,8 @@ async def run(cfg: Config) -> None:
                     client = BleModbusClient(
                         device, cfg.ble_timeout, cfg.read_timeout, pin=cfg.ble_pin
                     )
+                if mqtt is not None:
+                    mqtt.publish_ble_state("connecting")
                 await client.connect()
                 if not box["paired"]:
                     log.info("unpair arrived during connect; releasing link")
@@ -196,6 +201,7 @@ async def run(cfg: Config) -> None:
                 log.error("session failed: BLE link dropped")
                 if mqtt is not None:
                     mqtt.set_availability(False)
+                    mqtt.publish_ble_state("disconnected")
                 if connect_failures >= 3:
                     log.info("rediscovering controller after %d failures", connect_failures)
                     device = None
@@ -212,6 +218,7 @@ async def run(cfg: Config) -> None:
                 log.error("session failed: %s", exc)
                 if mqtt is not None:
                     mqtt.set_availability(False)
+                    mqtt.publish_ble_state("disconnected")
                 if not box["paired"]:
                     continue
                 if connect_failures >= 3:
