@@ -50,32 +50,6 @@ def _retry_backoff(retry_interval: float, streak: int, cap: float) -> float:
     return min(retry_interval * (2 ** min(streak - 1, 8)), cap)
 
 
-def _bluez_hint(exc: Exception) -> str | None:
-    """Actionable hint when a failure is caused by the host BlueZ stack being
-    down (bluetoothd not running / D-Bus activation timing out / no adapter).
-
-    On Linux the bridge reaches BlueZ through the host's D-Bus socket. If the
-    daemon died or its HCI adapter was never attached (e.g. an `apt-get` bluez
-    upgrade restarted the service and the attach step failed), bleak surfaces
-    a raw dbus error or an `adapter 'hciX' not found`. Return a short
-    "check the host" hint for those, None otherwise.
-    """
-    msg = str(exc).lower()
-    if (
-        "org.freedesktop.dbus" in msg
-        or "failed to activate service" in msg
-        or "serviceunknown" in msg
-        or ("adapter" in msg and "not found" in msg)
-    ):
-        return (
-            "host BlueZ is down or has no HCI adapter - on the Docker host "
-            "check: systemctl status bluetooth; hciconfig hci0; "
-            "systemctl restart bluetooth (after an apt upgrade, hci0 may "
-            "need re-attaching - see bluetooth/README.md troubleshooting)"
-        )
-    return None
-
-
 async def _log_stats_diagnostic(client) -> None:
     """One-shot INFO log of the raw statistics registers (0x0300-0x0313) so the
     device's exact output can be cross-checked against the decoded entities
