@@ -134,13 +134,15 @@ async def release_stale_link(
 class BleModbusClient:
     """Async Modbus-RTU-over-BLE client (one outstanding request at a time).
 
-    The controller gates BLE access (reads return EXC 0x04) — increasingly so
-    on reconnects — behind a PIN lock (default "000000"). This client presents
-    the PIN as ASCII registers via FC10 @ 0x0400 immediately after connect,
-    so reads are un-gated from the first one. If a read still comes back EXC
-    0x04 (e.g. wrong PIN), it re-presents the PIN once and retries while the
-    gate is not yet open. Note the controller acknowledges the PIN write with
-    an illegal-register exception (0x02) or auth exception (0x04) while still
+    The controller gates BLE access (reads return EXC 0x04) behind a PIN lock
+    (default "000000") in some states. Telemetry registers are ungated when the
+    controller is healthy, so the client does NOT present the PIN eagerly on
+    connect (the vendor app never writes it in its polling path either; a live
+    capture shows its GATT sequence is subscribe-notify then write reads).
+    Instead it reads directly and, if a read comes back EXC 0x04 (auth-gated),
+    presents the PIN once via FC10 @ 0x0400 and retries while the gate is not
+    yet open. Note the controller acknowledges the PIN write with an
+    illegal-register exception (0x02) or auth exception (0x04) while still
     acting on it, so the unlock write is fire-and-forget.
     """
 
@@ -207,17 +209,17 @@ class BleModbusClient:
             await self._client.disconnect()
             raise RuntimeError("Modbus GATT characteristics (AAA1/BBB1) not found")
         self._write_char = write_char
-        await self._client.start_notify(notify_char, self._on_notify)
         self._connected = True
         log.info("connected to %r (%s)", self.device.name, self.device.address)
-        # The controller re-gates the link right after (re)connect and drops
-        # links that do not present the PIN promptly (observed drop ~5-6 s in
-        # with no Modbus traffic, even from plain bluetoothctl). Present the PIN
-        # as the FIRST Modbus frame, before any telemetry read. The write is
-        # acknowledged with 0x02/0x04 (or no ack) yet still honoured, and the
-        # unlock persists across reconnects, so this is safe and idempotent.
-        # Lazy re-present remains as a backstop if a read is still gated.
-        await self._unlock(timeout=min(self.read_timeout, 2.0))
+        # Telemetry is ungated when the controller is healthy (verified Aug-10
+        # and on live captures of the vendor app: it never writes a PIN in its
+        # polling path). The ~5 s drop is an idle-link timeout, not a PIN gate:
+        # plain bluetoothctl with zero Modbus traffic gets dropped too. Sending
+        # the FC10 PIN write eagerly is therefore both useless and a behaviour
+        # the vendor app does not have, so we skip it and match the app exactly:
+        # subscribe to the notify characteristic and read directly. A lazy
+        # unlock remains as a backstop if a read does come back auth-gated.
+        await self._client.start_notify(notify_char, self._on_notify)
 
     async def disconnect(self) -> None:
         if self._client is not None:

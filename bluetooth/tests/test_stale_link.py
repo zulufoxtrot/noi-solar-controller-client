@@ -10,6 +10,7 @@ import unittest
 from unittest import mock
 
 from bluetooth.app.ble_client import _bluez_adapter, release_stale_link
+from bluetooth.app.main import _bluez_hint
 
 ADDR = "B4:C2:E0:E0:50:BC"
 ADAPTER_PATH = "/org/bluez/hci0"
@@ -151,6 +152,33 @@ class ReleaseStaleLinkTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(_bluez_adapter(Dev1()), "hci1")
         self.assertEqual(_bluez_adapter(Dev2()), "")
+
+
+class BluezHintTest(unittest.TestCase):
+    def test_dbus_activation_timeout(self):
+        exc = Exception(
+            "[org.freedesktop.DBus.Error.TimedOut] "
+            "Failed to activate service 'org.bluez': timed out "
+            "(service_start_timeout=25000ms)"
+        )
+        self.assertIsNotNone(_bluez_hint(exc))
+
+    def test_missing_adapter(self):
+        self.assertIsNotNone(_bluez_hint(Exception("adapter 'hci0' not found")))
+
+    def test_service_unknown(self):
+        self.assertIsNotNone(_bluez_hint(Exception("org.freedesktop.DBus.Error.ServiceUnknown")))
+
+    def test_controller_not_found_is_not_bluez(self):
+        self.assertIsNone(_bluez_hint(Exception("no controller found, retrying")))
+
+    def test_modbus_read_timeout_is_not_bluez(self):
+        self.assertIsNone(_bluez_hint(Exception("request timed out after 5s")))
+
+    def test_hint_mentions_host_checks(self):
+        hint = _bluez_hint(Exception("adapter 'hci0' not found"))
+        self.assertIn("systemctl status bluetooth", hint)
+        self.assertIn("hciconfig hci0", hint)
 
 
 if __name__ == "__main__":
