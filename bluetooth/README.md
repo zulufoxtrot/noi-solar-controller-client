@@ -51,6 +51,53 @@ auto-recovers — it releases/removes the stale BlueZ device before scanning —
 if the controller still never shows up after repeated releases, power-cycle it
 (see `BLE.md` → "Reconnecting after a container restart").
 
+## Troubleshooting
+
+### `Failed to activate service 'org.bluez': timed out` / `adapter 'hci0' not found`
+
+The bridge reaches BlueZ over the host's D-Bus socket, so these errors are
+**host-side**, not controller-side:
+
+* `[org.freedesktop.DBus.Error.TimedOut] Failed to activate service
+  'org.bluez': timed out` — the host's D-Bus daemon tried to start
+  `bluetooth.service` and it never came up in 25 s. Usually fallout from an
+  `apt-get upgrade` of bluez: the package's postinst restarts the service and,
+  on some SBCs, the HCI adapter attach step dies with it.
+* `adapter 'hci0' not found` — `bluetoothd` is up but has **no radio**: the
+  HCI attach never ran (or crashed), so `/sys/class/bluetooth` is empty.
+
+On the Docker host, in order:
+
+```bash
+systemctl status bluetooth          # is the daemon up / failing?
+hciconfig hci0                      # is there a radio at all?
+systemctl restart bluetooth
+```
+
+If the daemon restarts but hci0 is still missing, the HCI attach step needs
+re-running. On boards whose Bluetooth is a UART/serial chip (e.g. the Orange Pi
+Zero 3's UWE5622, which attaches via the `aw859a-bluetooth.service` unit running
+`hciattach_opi`), a failed attach at boot leaves the radio silent even though
+`bluetoothd` runs fine — restart the attach unit:
+
+```bash
+systemctl status aw859a-bluetooth.service   # see it failed / never ran
+systemctl restart aw859a-bluetooth.service
+hciconfig hci0                              # should now show UP RUNNING
+```
+
+The bridge's retry loop (≤ 5 min backoff) reconnects automatically once hci0 is
+back; no container restart needed. If the attach crashed at boot (a transient
+segfault racing the radio firmware init), give the attach unit an automatic
+retry so a package restart can't strand the radio again:
+
+```bash
+sudo mkdir -p /etc/systemd/system/aw859a-bluetooth.service.d
+printf '[Service]\nRestart=on-failure\nRestartSec=2\n' \
+  | sudo tee /etc/systemd/system/aw859a-bluetooth.service.d/override.conf
+sudo systemctl daemon-reload && sudo systemctl restart aw859a-bluetooth.service
+```
+
 ## Configuration (env vars)
 
 | Variable | Default | Meaning |

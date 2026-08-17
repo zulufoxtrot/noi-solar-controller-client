@@ -98,55 +98,72 @@ async def session(
     command arrives, the BLE link drops, or shutdown is requested. Returns the
     (possibly new) bridge. `stop` is observed so SIGTERM unwinds to a clean
     `client.disconnect()` instead of leaving the BLE link held."""
-    if mqtt is None:
-        sysinfo = registers.decode_sysinfo(
-            await client.read_holding(*registers.BLOCK_SYSINFO)
-        )
-        node_id = sysinfo.get("serial_number") or client.name.replace(" ", "_")
-        log.info(
-            "controller: %s %s (SN %s, sw %s)",
-            sysinfo.get("manufacturer"), sysinfo.get("model"),
-            node_id, sysinfo.get("sw_version"),
-        )
-        mqtt = MqttBridge(
-            cfg, node_id, sysinfo,
-            on_pair=box["on_pair"], on_command=box["on_command"],
-        )
-        mqtt.connect()
-        mqtt.publish_discovery()
-    mqtt.set_availability(True)
-    mqtt.publish_pairing(True)
-    mqtt.publish_ble_state("connected")
-    await _log_stats_diagnostic(client)
-
-    while box["paired"] and client.is_connected and not stop.is_set():
-        state = await poll_once(client)
-        log.info(
-            "PV %.2f V / %.1f W | batt %.2f V / %.1f%% | charge %s %.1f W | %s",
-            state["pv_voltage"], state["pv_power"],
-            state["battery_voltage"], state["battery_soc"],
-            state["charge_phase"], state["charge_power"], state["running_state"],
-        )
-        mqtt.publish_state(state)
-        box["pair_changed"].clear()
-        stop_task = asyncio.create_task(stop.wait())
-        change_task = asyncio.create_task(box["pair_changed"].wait())
-        try:
-            _, pending = await asyncio.wait(
-                {stop_task, change_task},
-                timeout=cfg.poll_interval,
-                return_when=asyncio.FIRST_COMPLETED,
+    created = mqtt is None
+    try:
+        if mqtt is None:
+            sysinfo = registers.decode_sysinfo(
+                await client.read_holding(*registers.BLOCK_SYSINFO)
             )
-        finally:
-            for task in pending:
-                task.cancel()
-    if stop.is_set():
-        log.info("session stopped: releasing BLE link")
-    elif box["paired"]:
-        log.info("session ended: BLE link dropped")
-    else:
-        log.info("session released: unpaired")
-    return mqtt
+            node_id = sysinfo.get("serial_number") or client.name.replace(" ", "_")
+            log.info(
+                "controller: %s %s (SN %s, sw %s)",
+                sysinfo.get("manufacturer"), sysinfo.get("model"),
+                node_id, sysinfo.get("sw_version"),
+            )
+            mqtt = MqttBridge(
+                cfg, node_id, sysinfo,
+                on_pair=box["on_pair"], on_command=box["on_command"],
+            )
+            mqtt.connect()
+            mqtt.publish_discovery()
+        mqtt.set_availability(True)
+        mqtt.publish_pairing(True)
+        mqtt.publish_ble_state("connected")
+        await _log_stats_diagnostic(client)
+
+        while box["paired"] and client.is_connected and not stop.is_set():
+            state = await poll_once(client)
+            log.info(
+                "PV %.2f V / %.1f W | batt %.2f V / %.1f%% | charge %s %.1f W | %s",
+                state["pv_voltage"], state["pv_power"],
+                state["battery_voltage"], state["battery_soc"],
+                state["charge_phase"], state["charge_power"], state["running_state"],
+            )
+            mqtt.publish_state(state)
+            box["pair_changed"].clear()
+            stop_task = asyncio.create_task(stop.wait())
+            change_task = asyncio.create_task(box["pair_changed"].wait())
+            try:
+                _, pending = await asyncio.wait(
+                    {stop_task, change_task},
+                    timeout=cfg.poll_interval,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+            finally:
+                for task in pending:
+                    task.cancel()
+        if stop.is_set():
+            log.info("session stopped: releasing BLE link")
+        elif box["paired"]:
+            log.info("session ended: BLE link dropped")
+        else:
+            log.info("session released: unpaired")
+        return mqtt
+    except BaseException:
+        if created and mqtt is not None:
+            # The bridge was built (paho loop thread + socket started) but never
+            # handed back to run() because the BLE link failed mid-session. If we
+            # let it go, its auto-reconnect thread would reconnect forever as the
+            # same client id, stealing the session from the *next* bridge and
+            # stacking up takeovers. Close it so the thread dies here. (If the
+            # failure happened during the sysinfo read, mqtt is still None and
+            # there is nothing to close.)
+            log.error("session failed before returning; closing new MQTT bridge")
+            try:
+                mqtt.close()
+            except Exception:  # noqa: BLE001 - never mask the original error
+                log.exception("failed to close newly-created MQTT bridge")
+        raise
 
 
 async def run(cfg: Config) -> None:
@@ -258,10 +275,18 @@ async def run(cfg: Config) -> None:
                         # it before every scan, escalating to a full BlueZ
                         # "remove" after repeated discovery failures.
                         if last_address:
+                            # Prefer releasing (Disconnect) over forgetting
+                            # (RemoveDevice). Wiping the BlueZ GATT cache forces
+                            # a cold service discovery, which the controller's
+                            # slow ATT stack (~4 s per answer, ~5 s link timeout)
+                            # cannot survive; the vendor app reconnects using its
+                            # cached characteristics instead. Only escalate to a
+                            # full cache wipe after the device has been invisible
+                            # for a very long time (10+ failed scans ~ 3+ min).
                             await release_stale_link(
                                 last_address,
                                 cfg.ble_adapter,
-                                remove=scan_failures >= 3,
+                                remove=scan_failures >= 10,
                             )
                         device = await discover_controller(
                             cfg.controller_name_prefix,
@@ -330,12 +355,14 @@ async def run(cfg: Config) -> None:
                     connect_failures = 0
                     if had_device and last_address:
                         # The controller was found but keeps dropping during/after
-                        # connect; a stale BlueZ GATT cache can make every new
-                        # connection fail service discovery. Force BlueZ to forget
-                        # the device so the next scan re-discovers from scratch.
-                        await release_stale_link(
-                            last_address, cfg.ble_adapter, remove=True
-                        )
+                        # connect. The vendor app reconnects against its cached
+                        # GATT characteristics (the controller's ATT answers are
+                        # slow and it drops the link ~5 s after connect), so we
+                        # must NOT wipe the cache here: a cold service discovery
+                        # is exactly what the controller cannot survive. Just
+                        # release any stale link and let the next connect reuse
+                        # the warm cache.
+                        await release_stale_link(last_address, cfg.ble_adapter)
                 if device is None:
                     scan_failures += 1
                     if scan_failures >= 6 and scan_failures % 6 == 0:
