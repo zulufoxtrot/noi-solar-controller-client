@@ -63,14 +63,6 @@ async def poll_once(client) -> dict:
         **registers.decode_running(running),
         **registers.decode_connect(connect),
     }
-    for block, decoder in (
-        (registers.BLOCK_EXT, registers.decode_extension),
-    ):
-        try:
-            regs = await client.read_holding(*block)
-            state.update(decoder(regs))
-        except Exception as exc:  # noqa: BLE001 - optional block, keep polling
-            log.warning("optional block %#06x failed: %s", block[0], exc)
     return state
 
 
