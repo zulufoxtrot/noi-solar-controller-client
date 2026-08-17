@@ -342,12 +342,7 @@ async def run(cfg: Config) -> None:
                 raise
             except Exception as exc:  # noqa: BLE001 - keep the bridge alive
                 connect_failures += 1
-                hint = _bluez_hint(exc)
-                if hint:
-                    log.error("session failed: %s", exc)
-                    log.error("HINT: %s", hint)
-                else:
-                    log.error("session failed: %s", exc)
+                log.error("session failed: %s", exc)
                 if mqtt is not None:
                     mqtt.set_availability(False)
                     mqtt.publish_ble_state("disconnected")
