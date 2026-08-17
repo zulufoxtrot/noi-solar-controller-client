@@ -58,11 +58,7 @@ async def poll_once(client) -> dict:
     dropping the whole BLE link (a single failure shouldn't kill a session).
     """
     running = await client.read_holding(*registers.BLOCK_RUNNING)
-    connect = await client.read_holding(*registers.BLOCK_CONNECT)
-    state = {
-        **registers.decode_running(running),
-        **registers.decode_connect(connect),
-    }
+    state = {**registers.decode_running(running)}
     return state
 
 
