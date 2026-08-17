@@ -69,7 +69,9 @@ async def poll_once(client) -> dict:
     for start, qty in RUNNING_SMALL_READS:
         chunk = await client.read_holding(start, qty)
         for i, value in enumerate(chunk):
-            regs[start - 0x00A0 + i] = value
+            idx = start - 0x00A0 + i
+            if 0 <= idx < 0x10:
+                regs[idx] = value
     state = {**registers.decode_running(regs)}
     return state
 
