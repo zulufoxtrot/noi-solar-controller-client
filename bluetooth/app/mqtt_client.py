@@ -292,6 +292,13 @@ class MqttBridge:
         self._client.publish(f"{self.base}/ble_pairing_state", state, retain=True)
 
     def publish_state(self, values: dict) -> None:
+        # During boot / activation the controller reports garbage telemetry
+        # (e.g. batt 0.27 V, SOC 572%, PV 82 V): report only the running state,
+        # never the other entities, until it reaches a stable state.
+        state = values.get("running_state")
+        if state in ("power_on_delay", "battery_activated", "init"):
+            self._client.publish(f"{self.base}/running_state", state, retain=True)
+            return
         for key, value in values.items():
             if key not in SENSORS:
                 continue
