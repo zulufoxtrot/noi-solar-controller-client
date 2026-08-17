@@ -1,22 +1,47 @@
 # noi-solar-controller-client
 
+A python client for the **Noi/Limu LTM** solar charge controller over Bluetooth.
+
+Features:
+- Bluetooth auto discovery
+- Publishes to an MQTT server
+- Home Assistant MQTT auto discovery
+
 ![photo](images/photo.jpg)
 
 *Depiction of the controller.*
 
-![homeassistant](images/homeassistant.png)
+![img.png](images/img.png)
 
 *Telemetry showing in Home Assistant.*
 
-Reverse-engineered client for the **Noi/Limu LTM** solar charge controller (MPPT 24 V, BLE + Wi-Fi + Modbus).
+## Interfaces
 
-Talks to the controller over **Bluetooth (BLE)**, the vendor **REST API**, and **MQTT**, giving you local telemetry without the official app — with Home Assistant auto-discovery.
+The controller has multiple interfaces:
 
-```
-LTM-252245 (BLE GATT FFF1)  ──Modbus RTU──▶  bridge  ──MQTT──▶  Home Assistant
-```
+**RS485**
 
-## Quick start (BLE bridge)
+Simple Modbus over RS485, though the RJ45 port. The modbus spec sheet is in the ``rs485`` folder.
+
+**Bluetooth LE**
+
+Basically a Bluetooth wrapper for the modbus interface. Modbus specs are the same.
+
+The default client is the [Noi Solar](https://play.google.com/store/apps/details?id=com.wyadmin.solar.app&hl=en) app.
+
+**Wifi**
+
+Once connected to wifi, the controller connects to a private HTTP & MQTT server: https://lmsolar.wyadmin.com.
+
+The HTTP API handles account management (user creation, pairing, ...).
+
+The MQTT server handles telemetry.
+
+I managed to reverse engineer parts of the API, but I failed to connect to the MQTT server.
+
+The telemetry is then consumed by the Noi Solar app.
+
+## Quick start
 
 ```bash
 cd bluetooth
@@ -36,28 +61,3 @@ cd bluetooth && docker compose up -d --build
 ```
 
 Environment: `MQTT_HOST`, `CONTROLLER_ADDRESS` (skip scan), `BLE_PIN` (unlock PIN, default `000000`), `POLL_INTERVAL`, `SIMULATE`. Full table in `bluetooth/README.md`.
-
-## What works
-
-- **BLE**: full local telemetry (PV/battery/charge) — auth-gated config area unlock solved (`BLE_PIN`).
-- **MQTT → HA**: 18 entities, auto-discovery, retained state + LWT.
-- Dump registers from the CLI: `python bluetooth/ble_modbus.py read 0x00A0 1`.
-
-## Layout
-
-| Path | What's in it |
-|------|--------------|
-| `bluetooth/` | BLE bridge (bleak → Modbus RTU → MQTT + HA), `ble_modbus.py` CLI, `BLE.md`, Docker |
-| `api/` | Vendor REST API (`HTTP-API.md`) and MQTT broker (`MQTT.md`) references |
-| `rs485/` | Modbus register map + framing (`PROTOCOL.md`), vendor protocol PDF |
-| `ARCHITECTURE.md` / `TODO.md` | Big picture and open questions |
-
-The controller speaks the same Modbus RTU on **every** channel (BLE GATT, RS485, cloud MQTT relay) — protocol details verified live on device live in `rs485/PROTOCOL.md`.
-
-## Status
-
-Reverse-engineering complete enough for local monitoring. Charge-parameter registers (config area `0x0400+`) are now unlocked but not yet fully mapped; writes (RTC, load/USB switch, charge params) are not implemented. See `TODO.md`.
-
-## Security
-
-Reverse-engineering notes, not an exploit. No vendor credentials are stored in this repo.
