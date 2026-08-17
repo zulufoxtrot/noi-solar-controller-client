@@ -50,15 +50,27 @@ def _retry_backoff(retry_interval: float, streak: int, cap: float) -> float:
     return min(retry_interval * (2 ** min(streak - 1, 8)), cap)
 
 
-async def poll_once(client) -> dict:
-    """Read all verified public blocks and decode them into one state dict.
+# The vendor app polls with small targeted reads (max 4 registers each:
+# 0x00A0:1, 0x00A5:3, 0x0088:1, 0x0504:4). Large block reads (e.g. the
+# 16-register 0x00A0 block) fragment into multiple BLE notifications and
+# progressively degrade the controller's ATT stack, ending in a hard reset.
+# Poll the same registers as small chunks to match the vendor's traffic.
+RUNNING_SMALL_READS = [
+    (0x00A0, 0x02),  # state + first fault word
+    (0x00A5, 0x03),  # PV V / A / W
+    (0x00A8, 0x04),  # battery type + rated + voltage + SOC
+    (0x00AC, 0x04),  # charge phase/switch + charge V / A / W
+]
 
-    The extension/stats blocks are optional telemetry: if the controller fails
-    one of those reads, keep the poll alive with what we got rather than
-    dropping the whole BLE link (a single failure shouldn't kill a session).
-    """
-    running = await client.read_holding(*registers.BLOCK_RUNNING)
-    state = {**registers.decode_running(running)}
+
+async def poll_once(client) -> dict:
+    """Read the running-data block as small vendor-style reads."""
+    regs = [0] * 0x10
+    for start, qty in RUNNING_SMALL_READS:
+        chunk = await client.read_holding(start, qty)
+        for i, value in enumerate(chunk):
+            regs[start - 0x00A0 + i] = value
+    state = {**registers.decode_running(regs)}
     return state
 
 
