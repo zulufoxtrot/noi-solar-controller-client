@@ -50,22 +50,6 @@ def _retry_backoff(retry_interval: float, streak: int, cap: float) -> float:
     return min(retry_interval * (2 ** min(streak - 1, 8)), cap)
 
 
-async def _log_stats_diagnostic(client) -> None:
-    """One-shot INFO log of the raw statistics registers (0x0300-0x0313) so the
-    device's exact output can be cross-checked against the decoded entities
-    (e.g. full-charge count at 0x0306, over-discharge count at 0x0307)."""
-    try:
-        raw = await client.read_holding(*registers.BLOCK_STATS)
-    except Exception as exc:  # noqa: BLE001 - optional diagnostic
-        log.info("stats diagnostic: block read failed: %s", exc)
-        return
-    base = registers.BLOCK_STATS[0]
-    log.info(
-        "stats raw: %s",
-        ", ".join(f"{base + i:#06x}={v:#06x}({v})" for i, v in enumerate(raw)),
-    )
-
-
 async def poll_once(client) -> dict:
     """Read all verified public blocks and decode them into one state dict.
 
@@ -81,7 +65,6 @@ async def poll_once(client) -> dict:
     }
     for block, decoder in (
         (registers.BLOCK_EXT, registers.decode_extension),
-        (registers.BLOCK_STATS, registers.decode_stats),
     ):
         try:
             regs = await client.read_holding(*block)
@@ -119,7 +102,6 @@ async def session(
         mqtt.set_availability(True)
         mqtt.publish_pairing(True)
         mqtt.publish_ble_state("connected")
-        await _log_stats_diagnostic(client)
 
         while box["paired"] and client.is_connected and not stop.is_set():
             state = await poll_once(client)
