@@ -130,6 +130,7 @@ async def session(
                 state["charge_phase"], state["charge_power"], state["running_state"],
             )
             mqtt.publish_state(state)
+            box["polled"] = True
             box["pair_changed"].clear()
             stop_task = asyncio.create_task(stop.wait())
             change_task = asyncio.create_task(box["pair_changed"].wait())
@@ -180,6 +181,7 @@ async def run(cfg: Config) -> None:
     cmd_q: asyncio.Queue[tuple[str, bool]] = asyncio.Queue()
     box = {
         "paired": True,
+        "polled": False,
         "on_pair": lambda pair: loop.call_soon_threadsafe(pair_q.put_nowait, pair),
         "on_command": lambda key, val: loop.call_soon_threadsafe(
             cmd_q.put_nowait, (key, val)
@@ -303,6 +305,7 @@ async def run(cfg: Config) -> None:
                     )
                 if mqtt is not None:
                     mqtt.publish_ble_state("connecting")
+                box["polled"] = False
                 await client.connect()
                 if stop.is_set():
                     log.info("shutdown during connect; releasing BLE link")
@@ -313,7 +316,6 @@ async def run(cfg: Config) -> None:
                     await _disconnect_soft(client, cfg.ble_timeout)
                     continue
                 connect_failures = 0
-                fail_streak = 0
                 mqtt = await session(client, cfg, mqtt, box, stop)
                 if stop.is_set():
                     break
@@ -330,7 +332,7 @@ async def run(cfg: Config) -> None:
                     log.info("rediscovering controller after %d failures", connect_failures)
                     device = None
                     connect_failures = 0
-                fail_streak += 1
+                fail_streak = 0 if box["polled"] else fail_streak + 1
                 wait = _retry_backoff(cfg.retry_interval, fail_streak, cfg.retry_backoff_max)
                 log.info("retrying in %.0fs (consecutive failures: %d)", wait, fail_streak)
                 try:
@@ -372,7 +374,7 @@ async def run(cfg: Config) -> None:
                             "advertising while it holds a stale BLE link)",
                             last_address, scan_failures,
                         )
-                fail_streak += 1
+                fail_streak = 0 if box["polled"] else fail_streak + 1
                 wait = _retry_backoff(cfg.retry_interval, fail_streak, cfg.retry_backoff_max)
                 log.info("retrying in %.0fs (consecutive failures: %d)", wait, fail_streak)
                 try:
