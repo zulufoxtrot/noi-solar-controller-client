@@ -211,15 +211,14 @@ class BleModbusClient:
         self._write_char = write_char
         self._connected = True
         log.info("connected to %r (%s)", self.device.name, self.device.address)
-        # Telemetry is ungated when the controller is healthy (verified Aug-10
-        # and on live captures of the vendor app: it never writes a PIN in its
-        # polling path). The ~5 s drop is an idle-link timeout, not a PIN gate:
-        # plain bluetoothctl with zero Modbus traffic gets dropped too. Sending
-        # the FC10 PIN write eagerly is therefore both useless and a behaviour
-        # the vendor app does not have, so we skip it and match the app exactly:
-        # subscribe to the notify characteristic and read directly. A lazy
-        # unlock remains as a backstop if a read does come back auth-gated.
-        await self._client.start_notify(notify_char, self._on_notify)
+        # The controller re-gates the link right after (re)connect and drops
+        # links that do not present the PIN promptly (observed drop ~5-6 s in
+        # with no Modbus traffic, even from plain bluetoothctl). Present the PIN
+        # as the FIRST Modbus frame, before any telemetry read. The write is
+        # acknowledged with 0x02/0x04 (or no ack) yet still honoured, and the
+        # unlock persists across reconnects, so this is safe and idempotent.
+        # Lazy re-present remains as a backstop if a read is still gated.
+        await self._unlock(timeout=self.read_timeout)
 
     async def disconnect(self) -> None:
         if self._client is not None:
@@ -278,6 +277,10 @@ class BleModbusClient:
             await self._wait_frame(timeout)
         except (modbus.ModbusError, TimeoutError):
             pass  # 0x02/0x04 rejection / no ack is expected
+        # The controller answers the PIN write late (~4 s); its 0x02/0x04
+        # rejection must not be left in the buffer, or it is mistaken for the
+        # next read's response (a "fc=0x10 code=0x04" session failure).
+        self._buf.clear()
         self._unlocked = True
 
     async def read_holding(self, start: int, qty: int) -> list[int]:
