@@ -211,14 +211,12 @@ class BleModbusClient:
         self._write_char = write_char
         self._connected = True
         log.info("connected to %r (%s)", self.device.name, self.device.address)
-        # The controller re-gates the link right after (re)connect and drops
-        # links that do not present the PIN promptly (observed drop ~5-6 s in
-        # with no Modbus traffic, even from plain bluetoothctl). Present the PIN
-        # as the FIRST Modbus frame, before any telemetry read. The write is
-        # acknowledged with 0x02/0x04 (or no ack) yet still honoured, and the
-        # unlock persists across reconnects, so this is safe and idempotent.
-        # Lazy re-present remains as a backstop if a read is still gated.
-        await self._unlock(timeout=self.read_timeout)
+        # No eager PIN write: the vendor app never writes a PIN in its polling path
+        # (verified on live captures, Aug-10) — it just subscribes and reads.
+        # Writing the PIN eagerly makes this controller drop the BLE link right
+        # after connect (observed ~2 s later, every connect), so skip it and
+        # match the app exactly. A lazy unlock remains as a backstop if a read
+        # does come back auth-gated.
 
     async def disconnect(self) -> None:
         if self._client is not None:
