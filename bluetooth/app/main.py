@@ -99,7 +99,11 @@ async def session(
             # reads stress the controller's fragile ATT tunnel and keep it in
             # its error-rate kick state.
             sysinfo = box.get("sysinfo")
-            if sysinfo is None:
+            if sysinfo is None and not box.get("identity_done"):
+                # One identity attempt ever: on fw 2.0.4 the tunnel is silent
+                # for the first ~10 s after connect, so this read usually
+                # times out — don't burn every session's good window on it.
+                box["identity_done"] = True
                 try:
                     sysinfo = registers.decode_sysinfo(
                         await client.read_holding(*registers.BLOCK_SYSINFO)
@@ -111,6 +115,8 @@ async def session(
                         exc,
                     )
                     sysinfo = {}
+            elif sysinfo is None:
+                sysinfo = {}
             node_id = (
                 box.get("node_id")
                 or sysinfo.get("serial_number")
@@ -134,6 +140,11 @@ async def session(
         mqtt.set_availability(True)
         mqtt.publish_pairing(True)
         mqtt.publish_ble_state("connected")
+
+        # fw 2.0.4 stays silent for ~10 s after connect; reads fired earlier
+        # simply time out. Let the tunnel wake up before the first request.
+        if cfg.post_connect_seconds and not cfg.simulate:
+            await asyncio.sleep(cfg.post_connect_seconds)
 
         # The controller's tunnel wedges ~90 s into a connection (sw 2.0.4);
         # rotating before that keeps every session healthy end-to-end.

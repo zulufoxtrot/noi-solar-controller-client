@@ -45,6 +45,8 @@ class Config:
     # Quiet gap between a planned rotation and the next connect; reconnecting
     # within seconds of a clean disconnect trips its auth gate.
     rotate_gap_seconds: float = 20.0
+    # Silence window after connect before the first Modbus request.
+    post_connect_seconds: float = 8.0
     device_name: str = "Limu Solar Controller"  # display name in HA
     simulate: bool = False  # fake telemetry, no BLE (test MQTT path)
     log_level: str = "INFO"
@@ -82,6 +84,9 @@ class Config:
             ),
             rotate_gap_seconds=float(
                 _env("ROTATE_GAP_SECONDS", str(cls.rotate_gap_seconds))
+            ),
+            post_connect_seconds=float(
+                _env("POST_CONNECT_SECONDS", str(cls.post_connect_seconds))
             ),
             device_name=_env("DEVICE_NAME", cls.device_name),
             simulate=_bool("SIMULATE", False),
