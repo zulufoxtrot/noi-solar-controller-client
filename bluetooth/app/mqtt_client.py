@@ -101,6 +101,16 @@ BATTERY_ATTRIBUTES: dict[str, str] = {
 
 BATTERY_ENTITY_KEY = "battery_soc"  # entity carrying the battery json attributes
 
+# Generous physical bounds (any LTM voltage/current config must fit); they only
+# need to catch impossible frames, e.g. ASCII bytes decoded as register words.
+PLAUSIBLE_RANGES: dict[str, tuple[float, float]] = {
+    "pv_voltage": (0.0, 250.0),
+    "pv_power": (-5.0, 5000.0),
+    "battery_voltage": (0.5, 120.0),
+    "battery_soc": (0.0, 100.0),
+    "charge_power": (-500.0, 5000.0),
+}
+
 
 class MqttBridge:
     def __init__(
@@ -298,6 +308,25 @@ class MqttBridge:
         state = values.get("running_state")
         if state in ("power_on_delay", "battery_activated", "init"):
             self._client.publish(f"{self.base}/running_state", state, retain=True)
+            return
+        # The controller can also serve wrong-register frames while claiming a
+        # healthy "running" state (ASCII version bytes decode as e.g.
+        # batt 125.90 V / SOC 13102 %). Drop samples that are physically
+        # impossible rather than letting them overwrite good retained values;
+        # the next poll overwrites nothing and HA keeps the last sane data.
+        bad = [
+            f"{k}={v}"
+            for k, v in (
+                ("pv_voltage", values.get("pv_voltage")),
+                ("battery_voltage", values.get("battery_voltage")),
+                ("battery_soc", values.get("battery_soc")),
+                ("pv_power", values.get("pv_power")),
+                ("charge_power", values.get("charge_power")),
+            )
+            if v is not None and not PLAUSIBLE_RANGES[k][0] <= v <= PLAUSIBLE_RANGES[k][1]
+        ]
+        if bad:
+            log.warning("dropping implausible sample (%s): %s", ", ".join(bad), state)
             return
         for key, value in values.items():
             if key not in SENSORS:

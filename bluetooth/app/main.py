@@ -64,10 +64,16 @@ RUNNING_SMALL_READS = [
 
 
 async def poll_once(client) -> dict:
-    """Read the running-data block as small vendor-style reads."""
+    """Read the running-data block as small vendor-style reads.
+
+    A short pause between chunks mimics the vendor app's cadence; back-to-back
+    requests without a gap have been observed to upset the controller's slow
+    ATT tunnel (~4 s per answer).
+    """
     regs = [0] * 0x10
     for start, qty in RUNNING_SMALL_READS:
         chunk = await client.read_holding(start, qty)
+        await asyncio.sleep(0.5)
         for i, value in enumerate(chunk):
             idx = start - 0x00A0 + i
             if 0 <= idx < 0x10:
@@ -86,15 +92,38 @@ async def session(
     created = mqtt is None
     try:
         if mqtt is None:
-            sysinfo = registers.decode_sysinfo(
-                await client.read_holding(*registers.BLOCK_SYSINFO)
+            # Identity is cached in `box` across sessions: a session that dies
+            # before returning must not re-read the big sysinfo block and
+            # rebuild discovery on every retry — repeated 30-register block
+            # reads stress the controller's fragile ATT tunnel and keep it in
+            # its error-rate kick state.
+            sysinfo = box.get("sysinfo")
+            if sysinfo is None:
+                try:
+                    sysinfo = registers.decode_sysinfo(
+                        await client.read_holding(*registers.BLOCK_SYSINFO)
+                    )
+                    box["sysinfo"] = sysinfo
+                except Exception as exc:  # noqa: BLE001 - identity is optional
+                    log.warning(
+                        "sysinfo read failed (%s); publishing under fallback id",
+                        exc,
+                    )
+                    sysinfo = {}
+            node_id = (
+                box.get("node_id")
+                or sysinfo.get("serial_number")
+                or client.name.replace(" ", "_")
             )
-            node_id = sysinfo.get("serial_number") or client.name.replace(" ", "_")
-            log.info(
-                "controller: %s %s (SN %s, sw %s)",
-                sysinfo.get("manufacturer"), sysinfo.get("model"),
-                node_id, sysinfo.get("sw_version"),
-            )
+            box["node_id"] = node_id
+            if sysinfo:
+                log.info(
+                    "controller: %s %s (SN %s, sw %s)",
+                    sysinfo.get("manufacturer"), sysinfo.get("model"),
+                    node_id, sysinfo.get("sw_version"),
+                )
+            else:
+                log.info("controller identity unknown; using %r", node_id)
             mqtt = MqttBridge(
                 cfg, node_id, sysinfo,
                 on_pair=box["on_pair"], on_command=box["on_command"],
