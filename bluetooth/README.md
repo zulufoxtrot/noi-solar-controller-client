@@ -111,7 +111,7 @@ sudo systemctl daemon-reload && sudo systemctl restart aw859a-bluetooth.service
 | `CONTROLLER_NAME_PREFIX` | `LTM-` | advertised-name filter for auto-discovery |
 | `CONTROLLER_ADDRESS` | empty | controller MAC/UUID → skip scanning |
 | `BLE_ADAPTER` | empty | e.g. `hci0` (Linux/BlueZ only) |
-| `BLE_PIN` | `000000` | unlock PIN; presented as ASCII via FC10 to `0x0400` immediately after every connect |
+| `BLE_PIN` | empty | optional unlock PIN (FC10 @ `0x0400`); **leave empty on fw ≥ 2.0.4** — there a PIN write makes the controller drop the BLE link within ~2 s |
 | `SCAN_TIMEOUT` | `20` | discovery scan duration (s) |
 | `READ_TIMEOUT` | `5` | per-read response timeout (s) |
 | `BLE_TIMEOUT` | `10` | BLE connect timeout (s) |
