@@ -134,16 +134,13 @@ async def release_stale_link(
 class BleModbusClient:
     """Async Modbus-RTU-over-BLE client (one outstanding request at a time).
 
-    The controller gates BLE access (reads return EXC 0x04) behind a PIN lock
-    (default "000000") in some states. Telemetry registers are ungated when the
-    controller is healthy, so the client does NOT present the PIN eagerly on
-    connect (the vendor app never writes it in its polling path either; a live
-    capture shows its GATT sequence is subscribe-notify then write reads).
-    Instead it reads directly and, if a read comes back EXC 0x04 (auth-gated),
-    presents the PIN once via FC10 @ 0x0400 and retries while the gate is not
-    yet open. Note the controller acknowledges the PIN write with an
-    illegal-register exception (0x02) or auth exception (0x04) while still
-    acting on it, so the unlock write is fire-and-forget.
+    Telemetry registers are ungated when the controller is healthy, so no PIN
+    is ever written proactively. If a read comes back EXC 0x04 (auth-gated,
+    seen after too-rapid reconnects on fw 2.0.4), `pin` decides the strategy:
+    with a PIN configured the client presents it once via FC10 @ 0x0400 and
+    retries patiently; with no PIN it fails fast so the caller backs off.
+    On fw 2.0.4 the PIN write itself makes the controller drop the BLE link
+    within ~2 s, so leave `BLE_PIN` empty unless older firmware needs it.
     """
 
     PIN_REG = 0x0400  # register receiving the ASCII PIN
@@ -296,7 +293,10 @@ class BleModbusClient:
                     exp = await self._wait_frame()
                     return modbus.parse_read_response(bytes(self._buf[:exp]))
                 except modbus.ModbusError as exc:
-                    if exc.code != self.AUTH_EXC or attempt == 2:
+                    if exc.code != self.AUTH_EXC or attempt == 2 or not self.pin:
+                        # No PIN configured: never write it — on fw 2.0.4 the
+                        # PIN write makes the controller drop the BLE link
+                        # within ~2 s. Back off instead and let the gate lift.
                         raise
                     if attempt == 0 and not self._unlocked:
                         await self._unlock()
@@ -321,7 +321,7 @@ class BleModbusClient:
                     modbus.parse_ack(bytes(self._buf[:exp]))
                     return
                 except modbus.ModbusError as exc:
-                    if exc.code != self.AUTH_EXC or attempt == 2:
+                    if exc.code != self.AUTH_EXC or attempt == 2 or not self.pin:
                         raise
                     if attempt == 0 and not self._unlocked:
                         await self._unlock()

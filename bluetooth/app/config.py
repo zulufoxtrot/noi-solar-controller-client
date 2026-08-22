@@ -42,6 +42,9 @@ class Config:
     # reads stop being answered and the radio then hides for minutes). Rotate
     # the link proactively before that point; 0 disables rotation.
     max_session_seconds: float = 75.0
+    # Quiet gap between a planned rotation and the next connect; reconnecting
+    # within seconds of a clean disconnect trips its auth gate.
+    rotate_gap_seconds: float = 20.0
     device_name: str = "Limu Solar Controller"  # display name in HA
     simulate: bool = False  # fake telemetry, no BLE (test MQTT path)
     log_level: str = "INFO"
@@ -76,6 +79,9 @@ class Config:
             ),
             max_session_seconds=float(
                 _env("MAX_SESSION_SECONDS", str(cls.max_session_seconds))
+            ),
+            rotate_gap_seconds=float(
+                _env("ROTATE_GAP_SECONDS", str(cls.rotate_gap_seconds))
             ),
             device_name=_env("DEVICE_NAME", cls.device_name),
             simulate=_bool("SIMULATE", False),

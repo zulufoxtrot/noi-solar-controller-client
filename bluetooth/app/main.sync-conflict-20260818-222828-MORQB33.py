@@ -64,16 +64,10 @@ RUNNING_SMALL_READS = [
 
 
 async def poll_once(client) -> dict:
-    """Read the running-data block as small vendor-style reads.
-
-    A short pause between chunks mimics the vendor app's cadence; back-to-back
-    requests without a gap have been observed to upset the controller's slow
-    ATT tunnel (~4 s per answer).
-    """
+    """Read the running-data block as small vendor-style reads."""
     regs = [0] * 0x10
     for start, qty in RUNNING_SMALL_READS:
         chunk = await client.read_holding(start, qty)
-        await asyncio.sleep(0.5)
         for i, value in enumerate(chunk):
             idx = start - 0x00A0 + i
             if 0 <= idx < 0x10:
@@ -90,41 +84,17 @@ async def session(
     (possibly new) bridge. `stop` is observed so SIGTERM unwinds to a clean
     `client.disconnect()` instead of leaving the BLE link held."""
     created = mqtt is None
-    loop = asyncio.get_running_loop()
     try:
         if mqtt is None:
-            # Identity is cached in `box` across sessions: a session that dies
-            # before returning must not re-read the big sysinfo block and
-            # rebuild discovery on every retry — repeated 30-register block
-            # reads stress the controller's fragile ATT tunnel and keep it in
-            # its error-rate kick state.
-            sysinfo = box.get("sysinfo")
-            if sysinfo is None:
-                try:
-                    sysinfo = registers.decode_sysinfo(
-                        await client.read_holding(*registers.BLOCK_SYSINFO)
-                    )
-                    box["sysinfo"] = sysinfo
-                except Exception as exc:  # noqa: BLE001 - identity is optional
-                    log.warning(
-                        "sysinfo read failed (%s); publishing under fallback id",
-                        exc,
-                    )
-                    sysinfo = {}
-            node_id = (
-                box.get("node_id")
-                or sysinfo.get("serial_number")
-                or client.name.replace(" ", "_")
+            sysinfo = registers.decode_sysinfo(
+                await client.read_holding(*registers.BLOCK_SYSINFO)
             )
-            box["node_id"] = node_id
-            if sysinfo:
-                log.info(
-                    "controller: %s %s (SN %s, sw %s)",
-                    sysinfo.get("manufacturer"), sysinfo.get("model"),
-                    node_id, sysinfo.get("sw_version"),
-                )
-            else:
-                log.info("controller identity unknown; using %r", node_id)
+            node_id = sysinfo.get("serial_number") or client.name.replace(" ", "_")
+            log.info(
+                "controller: %s %s (SN %s, sw %s)",
+                sysinfo.get("manufacturer"), sysinfo.get("model"),
+                node_id, sysinfo.get("sw_version"),
+            )
             mqtt = MqttBridge(
                 cfg, node_id, sysinfo,
                 on_pair=box["on_pair"], on_command=box["on_command"],
@@ -135,9 +105,6 @@ async def session(
         mqtt.publish_pairing(True)
         mqtt.publish_ble_state("connected")
 
-        # The controller's tunnel wedges ~90 s into a connection (sw 2.0.4);
-        # rotating before that keeps every session healthy end-to-end.
-        started = loop.time()
         while box["paired"] and client.is_connected and not stop.is_set():
             state = await poll_once(client)
             log.info(
@@ -147,15 +114,7 @@ async def session(
                 state["charge_phase"], state["charge_power"], state["running_state"],
             )
             mqtt.publish_state(state)
-            box["polled"] = True
             box["pair_changed"].clear()
-            if cfg.max_session_seconds and loop.time() - started >= cfg.max_session_seconds:
-                log.info(
-                    "rotating BLE link after %.0fs (max_session_seconds)",
-                    loop.time() - started,
-                )
-                box["rotate"] = True
-                break
             stop_task = asyncio.create_task(stop.wait())
             change_task = asyncio.create_task(box["pair_changed"].wait())
             try:
@@ -169,12 +128,10 @@ async def session(
                     task.cancel()
         if stop.is_set():
             log.info("session stopped: releasing BLE link")
-        elif not box["paired"]:
-            log.info("session released: unpaired")
-        elif box.get("rotate"):
-            log.info("session rotated: handing back for a fresh link")
-        else:
+        elif box["paired"]:
             log.info("session ended: BLE link dropped")
+        else:
+            log.info("session released: unpaired")
         return mqtt
     except BaseException:
         if created and mqtt is not None:
@@ -207,7 +164,6 @@ async def run(cfg: Config) -> None:
     cmd_q: asyncio.Queue[tuple[str, bool]] = asyncio.Queue()
     box = {
         "paired": True,
-        "polled": False,
         "on_pair": lambda pair: loop.call_soon_threadsafe(pair_q.put_nowait, pair),
         "on_command": lambda key, val: loop.call_soon_threadsafe(
             cmd_q.put_nowait, (key, val)
@@ -331,7 +287,6 @@ async def run(cfg: Config) -> None:
                     )
                 if mqtt is not None:
                     mqtt.publish_ble_state("connecting")
-                box["polled"] = False
                 await client.connect()
                 if stop.is_set():
                     log.info("shutdown during connect; releasing BLE link")
@@ -342,18 +297,12 @@ async def run(cfg: Config) -> None:
                     await _disconnect_soft(client, cfg.ble_timeout)
                     continue
                 connect_failures = 0
+                fail_streak = 0
                 mqtt = await session(client, cfg, mqtt, box, stop)
                 if stop.is_set():
                     break
                 if not box["paired"]:
                     log.info("session released by pairing toggle")
-                    continue
-                if box.get("rotate"):
-                    # Planned end-of-life rotation, not a failure: hand the
-                    # link back before the controller's tunnel wedges.
-                    box["rotate"] = False
-                    fail_streak = 0
-                    await asyncio.sleep(cfg.rotate_gap_seconds)
                     continue
                 # poll loop broke while still paired -> the BLE link dropped
                 connect_failures += 1
@@ -365,7 +314,7 @@ async def run(cfg: Config) -> None:
                     log.info("rediscovering controller after %d failures", connect_failures)
                     device = None
                     connect_failures = 0
-                fail_streak = 0 if box["polled"] else fail_streak + 1
+                fail_streak += 1
                 wait = _retry_backoff(cfg.retry_interval, fail_streak, cfg.retry_backoff_max)
                 log.info("retrying in %.0fs (consecutive failures: %d)", wait, fail_streak)
                 try:
@@ -407,7 +356,7 @@ async def run(cfg: Config) -> None:
                             "advertising while it holds a stale BLE link)",
                             last_address, scan_failures,
                         )
-                fail_streak = 0 if box["polled"] else fail_streak + 1
+                fail_streak += 1
                 wait = _retry_backoff(cfg.retry_interval, fail_streak, cfg.retry_backoff_max)
                 log.info("retrying in %.0fs (consecutive failures: %d)", wait, fail_streak)
                 try:
