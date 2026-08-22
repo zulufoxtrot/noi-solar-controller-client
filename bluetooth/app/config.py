@@ -38,6 +38,10 @@ class Config:
     poll_interval: float = 30.0
     retry_interval: float = 15.0
     retry_backoff_max: float = 300.0  # cap for exponential backoff after repeated failures
+    # The controller's BLE tunnel wedges ~90 s into every connection (sw 2.0.4:
+    # reads stop being answered and the radio then hides for minutes). Rotate
+    # the link proactively before that point; 0 disables rotation.
+    max_session_seconds: float = 75.0
     device_name: str = "Limu Solar Controller"  # display name in HA
     simulate: bool = False  # fake telemetry, no BLE (test MQTT path)
     log_level: str = "INFO"
@@ -69,6 +73,9 @@ class Config:
             retry_interval=float(_env("RETRY_INTERVAL", str(cls.retry_interval))),
             retry_backoff_max=float(
                 _env("RETRY_BACKOFF_MAX", str(cls.retry_backoff_max))
+            ),
+            max_session_seconds=float(
+                _env("MAX_SESSION_SECONDS", str(cls.max_session_seconds))
             ),
             device_name=_env("DEVICE_NAME", cls.device_name),
             simulate=_bool("SIMULATE", False),

@@ -90,6 +90,7 @@ async def session(
     (possibly new) bridge. `stop` is observed so SIGTERM unwinds to a clean
     `client.disconnect()` instead of leaving the BLE link held."""
     created = mqtt is None
+    loop = asyncio.get_running_loop()
     try:
         if mqtt is None:
             # Identity is cached in `box` across sessions: a session that dies
@@ -134,6 +135,9 @@ async def session(
         mqtt.publish_pairing(True)
         mqtt.publish_ble_state("connected")
 
+        # The controller's tunnel wedges ~90 s into a connection (sw 2.0.4);
+        # rotating before that keeps every session healthy end-to-end.
+        started = loop.time()
         while box["paired"] and client.is_connected and not stop.is_set():
             state = await poll_once(client)
             log.info(
@@ -145,6 +149,13 @@ async def session(
             mqtt.publish_state(state)
             box["polled"] = True
             box["pair_changed"].clear()
+            if cfg.max_session_seconds and loop.time() - started >= cfg.max_session_seconds:
+                log.info(
+                    "rotating BLE link after %.0fs (max_session_seconds)",
+                    loop.time() - started,
+                )
+                box["rotate"] = True
+                break
             stop_task = asyncio.create_task(stop.wait())
             change_task = asyncio.create_task(box["pair_changed"].wait())
             try:
@@ -158,10 +169,12 @@ async def session(
                     task.cancel()
         if stop.is_set():
             log.info("session stopped: releasing BLE link")
-        elif box["paired"]:
-            log.info("session ended: BLE link dropped")
-        else:
+        elif not box["paired"]:
             log.info("session released: unpaired")
+        elif box.get("rotate"):
+            log.info("session rotated: handing back for a fresh link")
+        else:
+            log.info("session ended: BLE link dropped")
         return mqtt
     except BaseException:
         if created and mqtt is not None:
@@ -334,6 +347,14 @@ async def run(cfg: Config) -> None:
                     break
                 if not box["paired"]:
                     log.info("session released by pairing toggle")
+                    continue
+                if box.get("rotate"):
+                    # Planned end-of-life rotation, not a failure: hand the
+                    # link back before the controller's ~90 s wedge. Reconnect
+                    # immediately; the old client is released by the next
+                    # connect's stale-link cleanup.
+                    box["rotate"] = False
+                    fail_streak = 0
                     continue
                 # poll loop broke while still paired -> the BLE link dropped
                 connect_failures += 1
