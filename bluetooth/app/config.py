@@ -29,7 +29,9 @@ class Config:
     controller_name_prefix: str = "LTM-"  # adverts: LTM-<last 6 of SN>
     controller_address: str = ""  # optional MAC/UUID to skip scanning
     ble_adapter: str = ""  # e.g. "hci0" (Linux/BlueZ only)
-    ble_pin: str = "000000"  # unlock PIN (FC10 ASCII write @ 0x0400)
+    # Empty by default: on fw 2.0.4 a PIN write to 0x0400 makes the controller
+    # drop the BLE link within ~2 s. Only set this on older firmware.
+    ble_pin: str = ""
     scan_timeout: float = 20.0
     ble_timeout: float = 10.0
     read_timeout: float = 5.0
