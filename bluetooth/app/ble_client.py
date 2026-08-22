@@ -280,25 +280,31 @@ class BleModbusClient:
         # rejection must not be left in the buffer, or it is mistaken for the
         # next read's response (a "fc=0x10 code=0x04" session failure).
         self._buf.clear()
+        # The gate opens late: reads right after the write still come back
+        # EXC 0x04. Stay quiet briefly so the acceptance lands (and any stray
+        # rejection drains), then clear again before the caller retries.
+        await asyncio.sleep(4.0)
+        self._buf.clear()
         self._unlocked = True
 
     async def read_holding(self, start: int, qty: int) -> list[int]:
         """FC03 read; unlocks first if the register is auth-gated."""
         async with self._lock:
-            for attempt in (0, 1):
+            for attempt in (0, 1, 2):
                 await self._send(modbus.build_read(start, qty))
                 try:
                     exp = await self._wait_frame()
                     return modbus.parse_read_response(bytes(self._buf[:exp]))
                 except modbus.ModbusError as exc:
-                    if (
-                        attempt == 0
-                        and not self._unlocked
-                        and exc.code == self.AUTH_EXC
-                    ):
+                    if exc.code != self.AUTH_EXC or attempt == 2:
+                        raise
+                    if attempt == 0 and not self._unlocked:
                         await self._unlock()
-                        continue
-                    raise
+                    else:
+                        # Already unlocked once: the gate just opens slowly.
+                        self._buf.clear()
+                        await asyncio.sleep(4.0)
+                    continue
             raise RuntimeError("unreachable")
 
     async def write_holding(self, start: int, value: int) -> None:
@@ -308,21 +314,22 @@ class BleModbusClient:
         register is auth-gated, same retry pattern as reads.
         """
         async with self._lock:
-            for attempt in (0, 1):
+            for attempt in (0, 1, 2):
                 await self._send(modbus.build_write_multi(start, [value]))
                 try:
                     exp = await self._wait_frame()
                     modbus.parse_ack(bytes(self._buf[:exp]))
                     return
                 except modbus.ModbusError as exc:
-                    if (
-                        attempt == 0
-                        and not self._unlocked
-                        and exc.code == self.AUTH_EXC
-                    ):
+                    if exc.code != self.AUTH_EXC or attempt == 2:
+                        raise
+                    if attempt == 0 and not self._unlocked:
                         await self._unlock()
-                        continue
-                    raise
+                    else:
+                        # Already unlocked once: the gate just opens slowly.
+                        self._buf.clear()
+                        await asyncio.sleep(4.0)
+                    continue
             raise RuntimeError("unreachable")
 
 

@@ -351,10 +351,12 @@ async def run(cfg: Config) -> None:
                 if box.get("rotate"):
                     # Planned end-of-life rotation, not a failure: hand the
                     # link back before the controller's ~90 s wedge. Reconnect
-                    # immediately; the old client is released by the next
-                    # connect's stale-link cleanup.
+                    # after a short quiet gap — reconnecting within seconds of
+                    # a clean disconnect trips its auth gate (reads return
+                    # EXC 0x04 until a PIN round-trip completes).
                     box["rotate"] = False
                     fail_streak = 0
+                    await asyncio.sleep(15)
                     continue
                 # poll loop broke while still paired -> the BLE link dropped
                 connect_failures += 1
