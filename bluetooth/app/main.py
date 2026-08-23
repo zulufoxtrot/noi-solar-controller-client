@@ -54,10 +54,14 @@ def _retry_backoff(retry_interval: float, streak: int, cap: float) -> float:
 # 0x00A0:1, 0x00A5:3, 0x0088:1, 0x0504:4). Large block reads (e.g. the
 # 16-register 0x00A0 block) fragment into multiple BLE notifications and
 # progressively degrade the controller's ATT stack, ending in a hard reset.
-# Poll the same registers as small chunks to match the vendor's traffic.
+# Poll the same registers in the same order first — on fw 2.0.4 the tunnel
+# frequently ignores reads that don't follow the vendor cadence — then append
+# our extra battery/charge chunks once the session is warm.
 RUNNING_SMALL_READS = [
-    (0x00A0, 0x02),  # state + first fault word
+    (0x00A0, 0x01),  # state (vendor-exact quantity)
     (0x00A5, 0x03),  # PV V / A / W
+    (0x0088, 0x01),  # Wi-Fi / cloud linkage (vendor polls this)
+    (0x0504, 0x04),  # command/session area (vendor polls this every cycle)
     (0x00A8, 0x04),  # battery type + rated + voltage + SOC
     (0x00AC, 0x04),  # charge phase/switch + charge V / A / W
 ]
