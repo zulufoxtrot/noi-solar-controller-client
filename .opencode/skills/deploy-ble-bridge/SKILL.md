@@ -1,21 +1,22 @@
 ---
 name: deploy-ble-bridge
-description: Deploy or update the noi-solar-controller-client BLE→MQTT bridge on the production Orange Pi SBC (youri@10.6.0.3, hostname "colombis"). Use when the user asks to deploy, update, test, or roll back the bridge, or to run the bridge image on the SBC. Covers the GHCR build-and-pull flow via the refactor branch, the local-build flow, verification, and the mandatory cleanup + restore of the production container.
+description: Deploy or update the noi-solar-controller-client BLE→MQTT bridge on the production Orange Pi SBC (youri@10.6.0.3, hostname "colombis"). Use when the user asks to deploy, update, test, or roll back the bridge, or to run the bridge image on the SBC. Covers the GHCR build-and-pull flow via the main branch, the local-build flow, verification, and the mandatory cleanup + restore of the production container.
 ---
 
 # Deploying the BLE→MQTT bridge to the SBC
 
 Production target: `youri@10.6.0.3` (Orange Pi Zero 3, hostname `colombis`,
 Allwinner sunxi64, UWE5622 Bluetooth via `hciattach_opi`). The bridge runs in a
-Docker container managed by a Portainer "portable-feeder" stack, image
-`ghcr.io/zulufoxtrot/noi-solar-controller-client:latest`, container name
-`377b5212aa78_limu-solar` (NOT `limu-solar`).
+Docker container managed by a Portainer "portable-feeder" stack, image pinned
+by commit SHA (`ghcr.io/zulufoxtrot/noi-solar-controller-client:<sha>`), container
+name `limu-solar`. (Renamed from the old Portainer-style
+`377b5212aa78_limu-solar` around 2026-08-20 — the old name appears in stale
+docs and log excerpts.)
 
 ## Golden rules
 
-1. **Never leave the production container stopped.** Whatever you test, the
-   original `377b5212aa78_limu-solar` must be running and healthy when you're
-   done.
+1. **Never leave the production container stopped.** Whatever you test,
+   `limu-solar` must be running and healthy when you're done.
 2. **Never run two instances of the bridge at once.** The controller is
    single-link: it stops advertising while connected. A second bridge would
    steal the link and both would flap. Stop the production container before
@@ -24,15 +25,20 @@ Docker container managed by a Portainer "portable-feeder" stack, image
    `/etc/sudoers.d/99-opencode-temp` during a session; use `sudo docker ...`).
 4. SSH is non-interactive: use `ssh -o BatchMode=yes youri@10.6.0.3 '...'`.
 
-## Flow 1: GHCR build via the refactor branch (preferred for real deploys)
+## Flow 1: GHCR build via the main branch (preferred for real deploys)
 
-The repo CI (`.github/workflows/ghcr.yml`) builds and pushes on every push,
-tagging both `latest` and `:<sha>`. Deploying a code change:
+The repo CI (`.github/workflows/ghcr.yml`, `on: [push]` — any branch) builds
+and pushes on every push, tagging both `latest` and `:<sha>`. Deploying a code
+change:
 
-1. Commit locally, push the branch CI watches (per user convention, `refactor`):
+1. Commit locally on `main`, then push:
    ```bash
-   git push origin refactor
+   git push origin main
    ```
+   (Historical note: before 2026-08-22 deploys went via a `refactor` branch;
+   that branch's Aug-18/19 lineage shipped a broken build missing the GATT
+   `start_notify` call — telemetry timed out on every read. `main` is now the
+   deploy source of truth.)
 2. Watch the build:
    ```bash
    gh run list --limit 1
@@ -47,10 +53,10 @@ tagging both `latest` and `:<sha>`. Deploying a code change:
    file. The verified recipe (replace `<SHA>`):
    ```bash
    # read current config first, preserve exactly:
-   ssh ... 'sudo docker inspect 377b5212aa78_limu-solar --format "{{json .Config.Env}}\n{{.HostConfig.NetworkMode}} {{.HostConfig.RestartPolicy.Name}}\n{{json .HostConfig.Binds}}"'
+   ssh ... 'sudo docker inspect limu-solar --format "{{json .Config.Env}}\n{{.HostConfig.NetworkMode}} {{.HostConfig.RestartPolicy.Name}}\n{{json .HostConfig.Binds}}"'
    # then swap:
-   ssh ... 'sudo docker stop 377b5212aa78_limu-solar && sudo docker rm 377b5212aa78_limu-solar && \
-     sudo docker run -d --name 377b5212aa78_limu-solar --network host --restart unless-stopped \
+   ssh ... 'sudo docker stop limu-solar && sudo docker rm limu-solar && \
+     sudo docker run -d --name limu-solar --network host --restart unless-stopped \
        -v /var/run/dbus:/var/run/dbus:ro \
        -e MQTT_CLIENT_ID=noi-solar-colombis -e SIMULATE=false \
        -e CONTROLLER_ADDRESS=B4:C2:E0:E0:50:BC -e MQTT_PORT=1883 -e MQTT_USERNAME=mqtt \
@@ -77,20 +83,20 @@ tagging both `latest` and `:<sha>`. Deploying a code change:
    `CONTROLLER_ADDRESS=B4:C2:E0:E0:50:BC`, `BLE_ADAPTER=hci0`,
    `MQTT_TOPIC_PREFIX=noi_solar`):
    ```bash
-   ssh ... 'sudo docker stop 377b5212aa78_limu-solar && sudo docker run -d --rm --network host \
+   ssh ... 'sudo docker stop limu-solar && sudo docker run -d --rm --network host \
      --name limu-test -v /var/run/dbus:/var/run/dbus:ro -e <same env> limu-test'
    ```
    The container needs `/var/run/dbus` mounted ro to reach host BlueZ.
 3. Verify (see below), then clean up and restore:
    ```bash
    ssh ... 'sudo docker rm -f limu-test; sudo docker rmi limu-test; \
-     sudo docker start 377b5212aa78_limu-solar; rm -rf /tmp/ble-bridge-test'
+     sudo docker start limu-solar; rm -rf /tmp/ble-bridge-test'
    ```
 
 ## Verifying the bridge
 
 ```bash
-ssh -o BatchMode=yes youri@10.6.0.3 'sudo docker logs 377b5212aa78_limu-solar --tail 20'
+ssh -o BatchMode=yes youri@10.6.0.3 'sudo docker logs limu-solar --tail 20'
 ```
 
 Healthy log signature:
@@ -104,6 +110,25 @@ Also confirm on the host (the radio must be attached):
 ```bash
 ssh ... 'systemctl is-active bluetooth; hciconfig hci0; systemctl status aw859a-bluetooth.service --no-pager -l'
 ```
+
+## Controller fw 2.0.4 BLE behavior (learned 2026-08-22/23)
+
+The controller's BLE Modbus tunnel is fragile on sw 2.0.4 (docs in
+`bluetooth/` were written against stable 1.x behavior — trust them less):
+
+* Links die within ~2–100 s of connect regardless of traffic.
+* Reads can come back auth-gated (EXC `0x04`) after recent activity; a PIN
+  write to `0x0400` makes it drop the link within ~2 s → **never send PIN**
+  (`BLE_PIN` empty).
+* After one successful exchange it gates the next connection unless given
+  roughly ≥30 min of radio silence. Rapid reconnects extend the lockout.
+
+Production therefore runs **burst mode**: `BURST_MODE=1`,
+`POST_CONNECT_SECONDS=0`, `READ_TIMEOUT=4`, `RETRY_INTERVAL=1800`,
+`ROTATE_GAP_SECONDS=1800`, `RETRY_BACKOFF_MAX=3600` → one clean sample every
+~30 min, no gating spiral. If the controller gets power-cycled or its firmware
+changes, revisit these knobs — healthy firmware may allow sustained sessions
+again (`BURST_MODE=0`).
 
 ## Host-side BlueZ breakage (the 2026-08-14 incident)
 

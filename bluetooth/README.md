@@ -116,7 +116,12 @@ sudo systemctl daemon-reload && sudo systemctl restart aw859a-bluetooth.service
 | `READ_TIMEOUT` | `5` | per-read response timeout (s) |
 | `BLE_TIMEOUT` | `10` | BLE connect timeout (s) |
 | `POLL_INTERVAL` | `30` | telemetry poll interval (s) |
-| `RETRY_INTERVAL` | `15` | reconnect backoff (s) |
+| `RETRY_INTERVAL` | `15` | reconnect backoff base (s) |
+| `RETRY_BACKOFF_MAX` | `300` | backoff cap between retries (s) |
+| `MAX_SESSION_SECONDS` | `75` | proactive link rotation; `0` disables |
+| `ROTATE_GAP_SECONDS` | `20` | quiet gap after a planned rotation before reconnecting |
+| `POST_CONNECT_SECONDS` | `8` | settle delay before the first read after connect |
+| `BURST_MODE` | `false` | capture one sample per connection, then leave immediately |
 | `DEVICE_NAME` | `Limu Solar Controller` | HA device display name |
 | `SIMULATE` | `false` | fake telemetry, no BLE |
 | `LOG_LEVEL` | `INFO` | |
