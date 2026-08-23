@@ -372,8 +372,12 @@ async def run(cfg: Config) -> None:
                 if box.get("rotate"):
                     # Planned end-of-life rotation, not a failure: hand the
                     # link back before the controller's tunnel wedges.
+                    # Release FIRST — a dangling idle link for the whole gap
+                    # invites the device's supervision timeout and keeps its
+                    # single-link slot busy for nothing.
                     box["rotate"] = False
                     fail_streak = 0
+                    await _disconnect_soft(client, cfg.ble_timeout)
                     await asyncio.sleep(cfg.rotate_gap_seconds)
                     continue
                 # poll loop broke while still paired -> the BLE link dropped
