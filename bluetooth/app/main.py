@@ -425,7 +425,15 @@ async def run(cfg: Config) -> None:
                             last_address, scan_failures,
                         )
                 fail_streak = 0 if box["polled"] else fail_streak + 1
-                wait = _retry_backoff(cfg.retry_interval, fail_streak, cfg.retry_backoff_max)
+                scan_only = "no controller found" in str(exc)
+                if scan_only:
+                    # Nothing was heard over the air — no connection was
+                    # attempted, so the controller's rate limiter is not
+                    # involved. Re-scan quickly: its advertise/hidden phases
+                    # cycle within minutes.
+                    wait = cfg.scan_retry_interval
+                else:
+                    wait = _retry_backoff(cfg.retry_interval, fail_streak, cfg.retry_backoff_max)
                 log.info("retrying in %.0fs (consecutive failures: %d)", wait, fail_streak)
                 try:
                     await asyncio.wait_for(stop.wait(), wait)

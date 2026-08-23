@@ -52,6 +52,10 @@ class Config:
     # Burst mode: capture exactly one sample per connection, then hand the
     # link straight back (for controllers whose links die within seconds).
     burst_mode: bool = False
+    # Fast re-scan when discovery found nothing (scanning is free; only
+    # connections count against the controller's rate limiter). The device's
+    # advertise/hidden phases cycle within minutes.
+    scan_retry_interval: float = 90.0
     device_name: str = "Limu Solar Controller"  # display name in HA
     simulate: bool = False  # fake telemetry, no BLE (test MQTT path)
     log_level: str = "INFO"
@@ -94,6 +98,9 @@ class Config:
                 _env("POST_CONNECT_SECONDS", str(cls.post_connect_seconds))
             ),
             burst_mode=_bool("BURST_MODE", cls.burst_mode),
+            scan_retry_interval=float(
+                _env("SCAN_RETRY_INTERVAL", str(cls.scan_retry_interval))
+            ),
             device_name=_env("DEVICE_NAME", cls.device_name),
             simulate=_bool("SIMULATE", False),
             log_level=os.environ.get("LOG_LEVEL", cls.log_level).upper(),
