@@ -159,6 +159,12 @@ async def session(
             )
             mqtt.publish_state(state)
             box["polled"] = True
+            if cfg.burst_mode:
+                # One sample is all we want: leave before the controller's
+                # link layer kicks us anyway.
+                log.info("burst sample captured; releasing link")
+                box["rotate"] = True
+                break
             box["pair_changed"].clear()
             if cfg.max_session_seconds and loop.time() - started >= cfg.max_session_seconds:
                 log.info(

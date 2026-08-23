@@ -49,6 +49,9 @@ class Config:
     rotate_gap_seconds: float = 20.0
     # Silence window after connect before the first Modbus request.
     post_connect_seconds: float = 8.0
+    # Burst mode: capture exactly one sample per connection, then hand the
+    # link straight back (for controllers whose links die within seconds).
+    burst_mode: bool = False
     device_name: str = "Limu Solar Controller"  # display name in HA
     simulate: bool = False  # fake telemetry, no BLE (test MQTT path)
     log_level: str = "INFO"
@@ -90,6 +93,7 @@ class Config:
             post_connect_seconds=float(
                 _env("POST_CONNECT_SECONDS", str(cls.post_connect_seconds))
             ),
+            burst_mode=_bool("BURST_MODE", cls.burst_mode),
             device_name=_env("DEVICE_NAME", cls.device_name),
             simulate=_bool("SIMULATE", False),
             log_level=os.environ.get("LOG_LEVEL", cls.log_level).upper(),
