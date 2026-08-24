@@ -444,12 +444,12 @@ async def run(cfg: Config) -> None:
                             last_address, scan_failures,
                         )
                 fail_streak = 0 if box["polled"] else fail_streak + 1
-                scan_only = "no controller found" in str(exc)
+                scan_only = not str(exc) or "no controller found" in str(exc)
                 if scan_only:
-                    # Nothing was heard over the air — no connection was
-                    # attempted, so the controller's rate limiter is not
-                    # involved. Re-scan quickly: its advertise/hidden phases
-                    # cycle within minutes.
+                    # Nothing was heard over the air - either no advert at all
+                    # or a connect that stalled before any Modbus traffic. No
+                    # rate-limiter state was touched, so retry quickly: the
+                    # device's advertise/healthy phases cycle within minutes.
                     wait = cfg.scan_retry_interval
                 else:
                     wait = _retry_backoff(cfg.retry_interval, fail_streak, cfg.retry_backoff_max)
