@@ -8,6 +8,7 @@ import asyncio
 import logging
 import signal
 
+from . import modbus
 from . import registers
 from .ble_client import (
     BleModbusClient,
@@ -444,15 +445,17 @@ async def run(cfg: Config) -> None:
                             last_address, scan_failures,
                         )
                 fail_streak = 0 if box["polled"] else fail_streak + 1
-                scan_only = not str(exc) or "no controller found" in str(exc)
-                if scan_only:
-                    # Nothing was heard over the air - either no advert at all
-                    # or a connect that stalled before any Modbus traffic. No
-                    # rate-limiter state was touched, so retry quickly: the
-                    # device's advertise/healthy phases cycle within minutes.
-                    wait = cfg.scan_retry_interval
-                else:
+                # Only a real Modbus exception response proves the controller
+                # is awake with its rate limiter armed - those earn the long
+                # backoff. Silence (timeouts, stalled connects, missing
+                # adverts) means it is merely deaf/asleep: harmless to probe
+                # again quickly, and its healthy phases can return within
+                # minutes.
+                awake_and_gated = isinstance(exc, modbus.ModbusError)
+                if awake_and_gated:
                     wait = _retry_backoff(cfg.retry_interval, fail_streak, cfg.retry_backoff_max)
+                else:
+                    wait = cfg.scan_retry_interval
                 log.info("retrying in %.0fs (consecutive failures: %d)", wait, fail_streak)
                 try:
                     await asyncio.wait_for(stop.wait(), wait)
