@@ -138,12 +138,13 @@ async def session(
             # reads stress the controller's fragile ATT tunnel and keep it in
             # its error-rate kick state.
             sysinfo = box.get("sysinfo")
-            if sysinfo is None and not box.get("identity_done"):
-                # One identity attempt ever, in SMALL chunks: the full
-                # 30-register block read fragments into many notifications and
-                # regularly times out within READ_TIMEOUT, which would push
-                # discovery onto the fallback node id (duplicate HA device).
-                box["identity_done"] = True
+            if sysinfo is None:
+                # Retry every session until it lands: without the serial the
+                # bridge publishes under a fallback node id, forking the HA
+                # device away from its whole history. Small chunks only - the
+                # full 30-register block fragments into many notifications and
+                # regularly overruns READ_TIMEOUT. This read is sysinfo-area,
+                # so it doubles as the mandatory session opener.
                 try:
                     regs = [0] * registers.BLOCK_SYSINFO[1]
                     for start, qty in ((0x000A, 0x06), (0x001A, 0x06)):
