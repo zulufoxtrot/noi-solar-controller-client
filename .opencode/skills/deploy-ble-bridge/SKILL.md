@@ -111,24 +111,28 @@ Also confirm on the host (the radio must be attached):
 ssh ... 'systemctl is-active bluetooth; hciconfig hci0; systemctl status aw859a-bluetooth.service --no-pager -l'
 ```
 
-## Controller fw 2.0.4 BLE behavior (learned 2026-08-22/23)
+## Controller fw 2.0.4 BLE behavior (learned 2026-08-22/24)
 
-The controller's BLE Modbus tunnel is fragile on sw 2.0.4 (docs in
-`bluetooth/` were written against stable 1.x behavior — trust them less):
-
-* Links die within ~2–100 s of connect regardless of traffic.
-* Reads can come back auth-gated (EXC `0x04`) after recent activity; a PIN
-  write to `0x0400` makes it drop the link within ~2 s → **never send PIN**
-  (`BLE_PIN` empty).
-* After one successful exchange it gates the next connection unless given
-  roughly ≥30 min of radio silence. Rapid reconnects extend the lockout.
-
-Production therefore runs **burst mode**: `BURST_MODE=1`,
-`POST_CONNECT_SECONDS=0`, `READ_TIMEOUT=4`, `RETRY_INTERVAL=1800`,
-`ROTATE_GAP_SECONDS=1800`, `RETRY_BACKOFF_MAX=3600` → one clean sample every
-~30 min, no gating spiral. If the controller gets power-cycled or its firmware
-changes, revisit these knobs — healthy firmware may allow sustained sessions
-again (`BURST_MODE=0`).
+* **Session opener rule (critical)**: the FIRST Modbus frame of every BLE
+  connection must be a sysinfo-area read (the vendor app always does this).
+  Skipping it makes the controller gate ALL traffic with EXC `0x04` until a
+  future session opens correctly. Never skip the opener, whatever caching
+  optimization suggests otherwise.
+* Links die within ~90–100 s of connect regardless of traffic → production
+  runs **burst mode** (`BURST_MODE=1`, `POST_CONNECT_SECONDS=0`,
+  `READ_TIMEOUT=4`, `ROTATE_GAP_SECONDS=300`, `RETRY_INTERVAL=600`): connect,
+  opener, one sample, release, repeat every ~5 min.
+* A PIN write in a *correctly-opened* session behaves like old firmware
+  (EXC `0x02` reject-but-honor, link survives). In a *poll-first* session it
+  drops the link in ~2 s. Keep `BLE_PIN=000000` set; the lazy-unlock backstop
+  works.
+* Advert payload carries Limu manufacturer data (currently constant `W1`);
+  service `00112233-4455-6677-8899-aabbccddeeff` (notify `00112333`, write
+  `00112433`) exists parallel to the Modbus tunnel — purpose unknown, probe
+  script staged at `/tmp/gatt_probe.py` on colombis.
+* If the controller gets power-cycled or its firmware changes, revisit these
+  knobs — healthy firmware may allow sustained sessions again
+  (`BURST_MODE=0`).
 
 ## Host-side BlueZ breakage (the 2026-08-14 incident)
 
