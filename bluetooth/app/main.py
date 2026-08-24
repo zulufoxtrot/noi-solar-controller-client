@@ -145,6 +145,13 @@ async def session(
         mqtt.publish_pairing(True)
         mqtt.publish_ble_state("connected")
 
+        # Session opener: the controller expects the FIRST Modbus frame of
+        # every connection to be a sysinfo-area read (the vendor app does this
+        # too). Skipping it - e.g. because identity is cached - makes fw 2.0.4
+        # gate all further traffic with EXC 0x04 until some future session
+        # opens correctly. This is a login, not identity retrieval.
+        await client.read_holding(registers.BLOCK_SYSINFO[0], 0x04)
+
         # fw 2.0.4 stays silent for ~10 s after connect; reads fired earlier
         # simply time out. Let the tunnel wake up before the first request.
         if cfg.post_connect_seconds and not cfg.simulate:
