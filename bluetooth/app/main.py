@@ -104,14 +104,18 @@ async def session(
             # its error-rate kick state.
             sysinfo = box.get("sysinfo")
             if sysinfo is None and not box.get("identity_done"):
-                # One identity attempt ever: on fw 2.0.4 the tunnel is silent
-                # for the first ~10 s after connect, so this read usually
-                # times out — don't burn every session's good window on it.
+                # One identity attempt ever, in SMALL chunks: the full
+                # 30-register block read fragments into many notifications and
+                # regularly times out within READ_TIMEOUT, which would push
+                # discovery onto the fallback node id (duplicate HA device).
                 box["identity_done"] = True
                 try:
-                    sysinfo = registers.decode_sysinfo(
-                        await client.read_holding(*registers.BLOCK_SYSINFO)
-                    )
+                    regs = [0] * registers.BLOCK_SYSINFO[1]
+                    for start, qty in ((0x000A, 0x06), (0x001A, 0x06)):
+                        chunk = await client.read_holding(start, qty)
+                        for i, value in enumerate(chunk):
+                            regs[start - registers.BLOCK_SYSINFO[0] + i] = value
+                    sysinfo = registers.decode_sysinfo(regs)
                     box["sysinfo"] = sysinfo
                 except Exception as exc:  # noqa: BLE001 - identity is optional
                     log.warning(
