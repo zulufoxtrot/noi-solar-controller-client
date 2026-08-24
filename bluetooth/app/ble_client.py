@@ -350,6 +350,7 @@ class SimulatedModbusClient:
             ],
             0x00B0: [1, 1200, 25, 30, 0, 500, 10, 5, 304, 0xFFFF, 0, 0],
             0x0300: self._stats_block(),
+            0x0504: [0, 0, 0, 0],  # command/session area (vendor polls it)
         }
 
     @staticmethod
@@ -409,11 +410,12 @@ class SimulatedModbusClient:
     async def read_holding(self, start: int, qty: int) -> list[int]:
         if not self._connected:
             raise ConnectionError("not connected")
-        block = self._blocks.get(start)
-        if block is None or len(block) != qty:
-            raise modbus.ModbusError(f"SIMULATE: no canned block at {start:#06x}+{qty}")
-        await asyncio.sleep(0.05)
-        return list(block)
+        for base, block in self._blocks.items():
+            if base <= start and start + qty <= base + len(block):
+                off = start - base
+                await asyncio.sleep(0.05)
+                return list(block[off : off + qty])
+        raise modbus.ModbusError(f"SIMULATE: no canned block at {start:#06x}+{qty}")
 
     async def write_holding(self, start: int, value: int) -> None:
         """Simulated switch write: mutates the canned block so a subsequent

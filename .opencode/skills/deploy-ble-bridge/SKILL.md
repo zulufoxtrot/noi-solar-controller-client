@@ -121,7 +121,10 @@ ssh ... 'systemctl is-active bluetooth; hciconfig hci0; systemctl status aw859a-
 * Links die within ~90–100 s of connect regardless of traffic → production
   runs **burst mode** (`BURST_MODE=1`, `POST_CONNECT_SECONDS=0`,
   `READ_TIMEOUT=4`, `ROTATE_GAP_SECONDS=300`, `RETRY_INTERVAL=600`): connect,
-  opener, one sample, release, repeat every ~5 min.
+  opener, one sample, release, repeat every ~5 min. Extended blocks
+  (extension/stats/connect/fault) are polled as optional all-or-nothing
+  groups appended AFTER the mandatory vendor-cadence prefix in
+  `RUNNING_SMALL_READS` — never reorder or shrink the prefix.
 * A PIN write in a *correctly-opened* session behaves like old firmware
   (EXC `0x02` reject-but-honor, link survives). In a *poll-first* session it
   drops the link in ~2 s. Keep `BLE_PIN=000000` set; the lazy-unlock backstop

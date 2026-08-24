@@ -67,14 +67,25 @@ RUNNING_SMALL_READS = [
     (0x00AC, 0x04),  # charge phase/switch + charge V / A / W
 ]
 
+# Extended telemetry groups, appended after the mandatory vendor prefix.
+# NEVER reorder the prefix - the controller gates sessions whose first frames
+# don't follow the vendor cadence. Each group below is all-or-nothing: if any
+# of its chunks fails, the group's keys are simply skipped for this burst and
+# HA keeps its previous retained values (never zeros). Group failures never
+# fail the core sample.
+OPTIONAL_GROUPS = [
+    ("ext", registers.BLOCK_EXT[0], registers.BLOCK_EXT[1], registers.decode_extension,
+     [(0x00B0, 0x04), (0x00B4, 0x04), (0x00B8, 0x04)]),
+    ("stats", registers.BLOCK_STATS[0], registers.BLOCK_STATS[1], registers.decode_stats,
+     [(0x0300, 0x04), (0x0304, 0x04), (0x0308, 0x04),
+      (0x030C, 0x04), (0x0310, 0x04)]),
+    ("connect", registers.BLOCK_CONNECT[0], registers.BLOCK_CONNECT[1], registers.decode_connect,
+     [(0x0080, 0x04), (0x0084, 0x04), (0x0088, 0x04)]),
+]
+
 
 async def poll_once(client) -> dict:
-    """Read the running-data block as small vendor-style reads.
-
-    A short pause between chunks mimics the vendor app's cadence; back-to-back
-    requests without a gap have been observed to upset the controller's slow
-    ATT tunnel (~4 s per answer).
-    """
+    """Read the running-data block as small vendor-style reads."""
     regs = [0] * 0x10
     for start, qty in RUNNING_SMALL_READS:
         chunk = await client.read_holding(start, qty)
@@ -84,6 +95,29 @@ async def poll_once(client) -> dict:
             if 0 <= idx < 0x10:
                 regs[idx] = value
     state = {**registers.decode_running(regs)}
+
+    # Optional second fault-bitmap word (vendor reads only 0x00A0 itself).
+    try:
+        state["fault_code"] = (await client.read_holding(0x00A1, 0x01))[0]
+        await asyncio.sleep(0.5)
+    except Exception as exc:  # noqa: BLE001 - optional telemetry
+        log.debug("optional read 0x00A1 failed: %s", exc)
+
+    for name, base, length, decoder, chunks in OPTIONAL_GROUPS:
+        try:
+            block = [0] * length
+            covered = [False] * length
+            for start, qty in chunks:
+                chunk = await client.read_holding(start, qty)
+                await asyncio.sleep(0.5)
+                for i, value in enumerate(chunk):
+                    block[start - base + i] = value
+                    covered[start - base + i] = True
+            if not all(covered):
+                raise RuntimeError("incomplete block coverage")
+            state.update(decoder(block))
+        except Exception as exc:  # noqa: BLE001 - optional telemetry
+            log.warning("optional %s block skipped this burst: %s", name, exc)
     return state
 
 

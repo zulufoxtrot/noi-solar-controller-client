@@ -230,6 +230,15 @@ class MqttBridge:
 
     def publish_discovery(self) -> None:
         """Publish retained HA auto-discovery config for every known sensor."""
+        # Ghost-entity cleanup: an old code version once published an
+        # external-temp entity (register 0xB9 reads 0xFFFF on units without
+        # the sensor). Empty retained payloads remove its discovery and state
+        # topics from the broker/HA.
+        for topic in (
+            f"{self._cfg.mqtt_discovery_prefix}/sensor/{self.node_id}/external_temp/config",
+            f"{self.base}/external_temp",
+        ):
+            self._client.publish(topic, "", retain=True)
         for key, (component, name, unit, dev_cla, state_cla, icon, category, options) in SENSORS.items():
             payload = {
                 "name": name,

@@ -128,17 +128,36 @@ sudo systemctl daemon-reload && sudo systemctl restart aw859a-bluetooth.service
 
 ## Telemetry
 
-Reads three verified public register blocks (see `../rs485/PROTOCOL.md`):
+> **fw ≥ 2.0.4 reality (overrides older text below):** every BLE connection
+> must open with a sysinfo-area read (session handshake) or the controller
+> gates all further traffic with EXC `0x04`. Links die within ~90-100 s, so
+> production polls in **burst mode**: connect → opener → vendor-cadence small
+> reads (max 4 registers each, never reorder that sequence) → optional
+> extension/statistics/link blocks → publish → disconnect. The external
+> temperature input has no sensor fitted (register `0xB9` reads `0xFFFF`);
+> its entity was removed and old discovery/state topics are cleared with
+> empty retained payloads.
+
+Blocks covered per burst:
 
 | Block | Registers | Values |
 |-------|-----------|--------|
-| System info | `0x000A–0x0027` | model, SW/HW versions, serial, manufacturer (once, for HA device) |
+| System info | `0x000A–0x0027` | model, SW/HW versions, serial, manufacturer (opener + once for HA device) |
 | Running data | `0x00A0–0x00AF` | state, fault, **PV V/A/W**, battery V/SOC/type, charge phase/V/A/W |
 | Connect data | `0x0080–0x008B` | Wi-Fi RSSI + link, cloud-MQTT link status |
+| Extension | `0x00B0–0x00BB` | load/USB switches+V/A/W, controller temp, fan |
+| Statistics | `0x0300–0x0313` | runtime, totals, today's generation/consumption/maxima |
 
-Published as retained per-key state topics, plus a retained availability topic
-(LWT `offline`):
+Optional groups are all-or-nothing per burst: a failed group keeps HA's last
+retained values instead of publishing zeros.
 
+Published as retained per-key state topics under `MQTT_TOPIC_PREFIX`
+(default `limu_solar`; production overrides to `noi_solar`), plus a retained
+availability topic (LWT `offline`):
+
+```
+noi_solar/<sn>/pv_voltage      → 22.31
+noi_solar/<sn>/availability    → online / offline
 ```
 limu_solar/<sn>/pv_voltage    → 21.09
 limu_solar/<sn>/availability  → online / offline
@@ -188,13 +207,13 @@ limu_solar/<sn>/availability_bridge   → online / offline    (switch availabili
 * Responses may arrive fragmented — accumulated by expected frame length.
 * Only the exact documented public ranges are read as blocks; a block read fails
   entirely (exception `0x02`) if any register in it is invalid.
-* The config (`0x0400+`) and — on reconnects — the whole link are password-gated:
-  reads return exception `0x04`. The bridge **presents the PIN as the first
-  Modbus frame after every connect** (the controller re-gates on reconnects and
-  drops links that don't present the PIN promptly) by writing the ASCII PIN to
-  `0x0400` via FC10 — the device replies `0x02`/`0x04` to that write yet honours
-  it — and re-presents it lazily if a read is still gated. `BLE_PIN` overrides
-  the default `000000`.
+* The config (`0x0400+`) can be password-gated: gated reads return exception
+  `0x04`. **fw ≥ 2.0.4 override:** the gate is armed by *skipping the sysinfo
+  session opener*, not by reconnects per se — see Telemetry above. The PIN is
+  presented lazily (FC10 ASCII to `0x0400`) only when a read comes back gated;
+  in a correctly-opened session the write is rejected with `0x02`/`0x04` yet
+  honoured, and the link survives. `BLE_PIN` defaults to `000000`; leave it
+  unset only if you enjoy lockouts.
 
 ## Open items
 
