@@ -50,7 +50,12 @@ change:
    ```
 4. Swap the running container. It's a Portainer stack (no local compose file),
    so recreate with the same env/mounts/network rather than editing a compose
-   file. The verified recipe (replace `<SHA>`):
+   file. **NEVER redeploy via `:latest`**: Portainer redeploys resolve to the
+   *local* `:latest` tag, which can be months stale (2026-08-27 incident: the
+   tag still pointed at the broken Aug-19 `108b7f9` build — 9 h of silent
+   failures until repinned). Always pull + run by full commit SHA, and if you
+   must keep a local `:latest`, `docker pull` it first. The verified recipe
+   (replace `<SHA>`; env matches production):
    ```bash
    # read current config first, preserve exactly:
    ssh ... 'sudo docker inspect limu-solar --format "{{json .Config.Env}}\n{{.HostConfig.NetworkMode}} {{.HostConfig.RestartPolicy.Name}}\n{{json .HostConfig.Binds}}"'
@@ -61,11 +66,16 @@ change:
        -e MQTT_CLIENT_ID=noi-solar-colombis -e SIMULATE=false \
        -e CONTROLLER_ADDRESS=B4:C2:E0:E0:50:BC -e MQTT_PORT=1883 -e MQTT_USERNAME=mqtt \
        -e POLL_INTERVAL=30 -e BLE_ADAPTER=hci0 -e TZ=Europe/Paris -e LOG_LEVEL=INFO \
-       -e CONTROLLER_NAME_PREFIX=LTM- -e BLE_PIN=000000 -e MQTT_TOPIC_PREFIX=noi_solar \
+       -e CONTROLLER_NAME_PREFIX=LTM- -e MQTT_TOPIC_PREFIX=noi_solar \
        -e MQTT_HOST=10.0.0.2 -e "DEVICE_NAME=Limu Solar Controller (Colombis)" \
        -e MQTT_DISCOVERY_PREFIX=homeassistant -e MQTT_PASSWORD=mqtt \
+       -e BLE_PIN=000000 \
+       -e BURST_MODE=1 -e POST_CONNECT_SECONDS=0 -e READ_TIMEOUT=4 \
+       -e RETRY_INTERVAL=600 -e RETRY_BACKOFF_MAX=1800 -e ROTATE_GAP_SECONDS=300 \
        ghcr.io/zulufoxtrot/noi-solar-controller-client:<SHA>'
    ```
+   Missing burst knobs (a recreate without env) shows as `request timed out
+   after 5.0s` loops with flat 300 s retries — that's the tell-tale.
    The env in the repo compose is NOT what the SBC runs — the Portainer stack
    overrides it (`MQTT_HOST=10.0.0.2`, `MQTT_USERNAME/PASSWORD=mqtt`,
    `MQTT_TOPIC_PREFIX=noi_solar`, `DEVICE_NAME=... (Colombis)`, `BLE_PIN=000000`).
