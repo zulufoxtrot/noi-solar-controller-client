@@ -424,6 +424,12 @@ async def run(cfg: Config) -> None:
                     # single-link slot busy for nothing.
                     box["rotate"] = False
                     fail_streak = 0
+                    # Drop the cached BLEDevice: after our disconnect BlueZ
+                    # invalidates the object intermittently, and reconnecting
+                    # against it fails for minutes with "device not found" /
+                    # connect timeouts (the 2026-08-28 dead-zone bug). Always
+                    # rediscover; a fresh scan finds the device in one window.
+                    device = None
                     await _disconnect_soft(client, cfg.ble_timeout)
                     await asyncio.sleep(cfg.rotate_gap_seconds)
                     continue
