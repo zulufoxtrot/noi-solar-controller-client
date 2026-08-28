@@ -32,7 +32,11 @@ class Config:
     # Empty by default: on fw 2.0.4 a PIN write to 0x0400 makes the controller
     # drop the BLE link within ~2 s. Only set this on older firmware.
     ble_pin: str = ""
-    scan_timeout: float = 20.0
+    # The controller advertises at a fixed ~25 s interval (measured), so a
+    # scan window below 25 s can miss it entirely depending on phase (and
+    # rotate_gap locks phases together). 35 s guarantees every scan sees at
+    # least one advert.
+    scan_timeout: float = 35.0
     ble_timeout: float = 10.0
     read_timeout: float = 5.0
 

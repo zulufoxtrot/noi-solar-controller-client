@@ -30,7 +30,7 @@ async def discover_controller(
     name_prefix: str,
     address: str = "",
     adapter: str = "",
-    scan_timeout: float = 20.0,
+    scan_timeout: float = 35.0,  # adverts arrive every ~25 s; 20 s can miss them
 ) -> BLEDevice | None:
     """Auto-discover the controller by advertised name prefix (or address).
 

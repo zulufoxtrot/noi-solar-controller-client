@@ -112,7 +112,7 @@ sudo systemctl daemon-reload && sudo systemctl restart aw859a-bluetooth.service
 | `CONTROLLER_ADDRESS` | empty | controller MAC/UUID → skip scanning |
 | `BLE_ADAPTER` | empty | e.g. `hci0` (Linux/BlueZ only) |
 | `BLE_PIN` | empty | optional unlock PIN (FC10 @ `0x0400`); **leave empty on fw ≥ 2.0.4** — there a PIN write makes the controller drop the BLE link within ~2 s |
-| `SCAN_TIMEOUT` | `20` | discovery scan duration (s) |
+| `SCAN_TIMEOUT` | `35` | discovery scan duration (s); must exceed the controller's ~25 s advert interval |
 | `READ_TIMEOUT` | `5` | per-read response timeout (s) |
 | `BLE_TIMEOUT` | `10` | BLE connect timeout (s) |
 | `POLL_INTERVAL` | `30` | telemetry poll interval (s) |
@@ -185,10 +185,11 @@ the controller to other clients (e.g. the phone app) without stopping the bridge
 * `OFF` — the bridge drops the BLE link and holds off. The controller is
   single-link: while a central is connected it stops advertising, so dropping the
   link makes it re-advertise and lets any other client connect. The bridge stays
-  up on MQTT, the sensor entities go unavailable (`availability = offline`), and
-  the switch keeps its own availability (`availability_bridge`) so it can be
-  flipped back on. Unpairing is purely dropping the central BLE link — no
-  OS-level bond removal.
+  up on MQTT and the sensor entities keep their last retained values
+  (availability tracks the *bridge process*, not the BLE link — BLE failures
+  never flip it). The pairing switch has its own availability
+  (`availability_bridge`) so it can be flipped back on. Unpairing is purely
+  dropping the central BLE link — no OS-level bond removal.
 
 New topics:
 

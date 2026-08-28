@@ -139,10 +139,24 @@ ssh ... 'systemctl is-active bluetooth; hciconfig hci0; systemctl status aw859a-
   (EXC `0x02` reject-but-honor, link survives). In a *poll-first* session it
   drops the link in ~2 s. Keep `BLE_PIN=000000` set; the lazy-unlock backstop
   works.
+* The controller advertises at a fixed **~25 s interval** (median over 12k+
+  adverts, zero gaps — it never stops advertising, even after disconnects).
+  Keep scan windows > 25 s (`SCAN_TIMEOUT=35` is the code default since
+  2026-08-27): a 20 s scan can miss every advert, and `ROTATE_GAP_SECONDS=300`
+  (= 12×25 s) phase-locks the retry loop so misses repeat — that was the
+  2026-08-27 "entities unavailable a few minutes every cycle" incident.
 * Advert payload carries Limu manufacturer data (currently constant `W1`);
   service `00112233-4455-6677-8899-aabbccddeeff` (notify `00112333`, write
   `00112433`) exists parallel to the Modbus tunnel — purpose unknown, probe
   script staged at `/tmp/gatt_probe.py` on colombis.
+* **HA availability semantics** (2026-08-27): all entities bind
+  `avty_t` to `noi_solar/<sn>/availability`, which now tracks the *bridge
+  process* only (birth on MQTT connect, LWT "offline" on ungraceful death,
+  offline on graceful close and on unpair). BLE link failures deliberately do
+  NOT flip it — entities keep their last retained values instead of going
+  unavailable; link state is visible via the retained `ble_pairing_state`
+  diagnostic entity. Don't reintroduce `set_availability(False)` on session
+  failure paths.
 * If the controller gets power-cycled or its firmware changes, revisit these
   knobs — healthy firmware may allow sustained sessions again
   (`BURST_MODE=0`).

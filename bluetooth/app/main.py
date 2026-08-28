@@ -431,7 +431,12 @@ async def run(cfg: Config) -> None:
                 connect_failures += 1
                 log.error("session failed: BLE link dropped")
                 if mqtt is not None:
-                    mqtt.set_availability(False)
+                    # Deliberately no set_availability(False) here: a BLE
+                    # hiccup must not flip every HA entity to unavailable
+                    # (entities keep their last retained values instead).
+                    # Link state stays visible via the ble_pairing_state
+                    # diagnostic entity; availability now only tracks the
+                    # bridge process (birth/LWT/graceful close).
                     mqtt.publish_ble_state("disconnected")
                 if connect_failures >= 3:
                     log.info("rediscovering controller after %d failures", connect_failures)
@@ -451,7 +456,7 @@ async def run(cfg: Config) -> None:
                 connect_failures += 1
                 log.error("session failed: %s", exc)
                 if mqtt is not None:
-                    mqtt.set_availability(False)
+                    # No set_availability(False): see the BLE-dropped branch.
                     mqtt.publish_ble_state("disconnected")
                 if not box["paired"]:
                     continue
