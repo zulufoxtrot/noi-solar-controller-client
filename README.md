@@ -41,22 +41,7 @@ I managed to reverse engineer parts of the API, but I failed to connect to the M
 
 ## Quick start
 
-```bash
-cd bluetooth
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-
-# no hardware — mock telemetry sent to MQTT:
-SIMULATE=1 MQTT_HOST=192.168.1.10 .venv/bin/python -m app
-
-# with your controller:
-MQTT_HOST=192.168.1.10 .venv/bin/python -m app
-```
-
-Or run in Docker (needs a Linux host with Bluetooth):
-
-```bash
-cd bluetooth && docker compose up -d --build
-```
+Head over to [bluetooth/README.md](./bluetooth/README.md)
 
 ## Keywords
 

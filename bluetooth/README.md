@@ -1,21 +1,12 @@
 # PoC: Limu/NOI solar charge controller → BLE → MQTT → Home Assistant
 
-Proof-of-concept bridge that reads telemetry from the Limu/NOI **LTM** solar
-charge controller (Modbus RTU spoken over the BLE GATT "Modbus tunnel", service
-`0000FFF1`) and publishes it to an MQTT broker with **Home Assistant auto
-discovery** enabled.
-
-Transport: `bleak` (CoreBluetooth on macOS, BlueZ/D-Bus on Linux). The same code
-runs natively on a Mac for development and inside a Linux container (e.g. a
-Raspberry Pi / home server) for production.
-
-```
-LTM-252245 (BLE GATT FFF1)  ──Modbus RTU──▶  this bridge  ──MQTT──▶  Home Assistant
-```
+Bridge that reads telemetry from the Limu/NOI **LTM** solar
+charge controller  and publishes it to an MQTT broker with Home Assistant auto
+discovery enabled.
 
 ## Quick start
 
-### Native (macOS — dev / no BLE in Docker Desktop)
+### Native
 
 ```bash
 python3 -m venv .venv
@@ -30,88 +21,24 @@ MQTT_HOST=192.168.1.10 .venv/bin/python -m app
 
 The bridge scans for any BLE device advertising a name starting with `LTM-`
 (controllers advertise `LTM-<last 6 of SN>`), connects, reads the verified
-public register blocks, and publishes. Point `CONTROLLER_ADDRESS` at the MAC to
-skip scanning.
+public register blocks, and publishes.
 
-### Docker (Linux host with Bluetooth + BlueZ)
+### Docker
 
 Build locally:
 
 ```bash
+cd bluetooth/
 docker compose up -d --build
 ```
 
-Or use the prebuilt multi-arch image (linux/amd64 + linux/arm64):
+Or use the prebuilt image:
 
 ```bash
 docker run -d --name limu-solar --network host --restart unless-stopped \
   -v /var/run/dbus:/var/run/dbus:ro \
   -e MQTT_HOST=192.168.1.10 \
   ghcr.io/zulufoxtrot/noi-solar-controller-client:v0.1.0
-```
-
-Images are published per commit SHA (pin for production) and per release tag
-(`v0.1.0`, ...); `latest` tracks main. See the
-[releases page](https://github.com/zulufoxtrot/noi-solar-controller-client/releases)
-for changelogs.
-
-`docker-compose.yml` uses `network_mode: host` and mounts the host D-Bus socket
-(`/var/run/dbus`) so the container reaches both the Bluetooth adapter and your
-broker. **Docker Desktop on macOS cannot pass Bluetooth through** — run
-natively there.
-
-If a **container restart** leaves the bridge looping on `no controller found`:
-the previous process died while the host BlueZ still held the BLE link (the
-controller is single-link and stops advertising while connected). The bridge now
-auto-recovers — it releases/removes the stale BlueZ device before scanning — but
-if the controller still never shows up after repeated releases, power-cycle it
-(see `BLE.md` → "Reconnecting after a container restart").
-
-## Troubleshooting
-
-### `Failed to activate service 'org.bluez': timed out` / `adapter 'hci0' not found`
-
-The bridge reaches BlueZ over the host's D-Bus socket, so these errors are
-**host-side**, not controller-side:
-
-* `[org.freedesktop.DBus.Error.TimedOut] Failed to activate service
-  'org.bluez': timed out` — the host's D-Bus daemon tried to start
-  `bluetooth.service` and it never came up in 25 s. Usually fallout from an
-  `apt-get upgrade` of bluez: the package's postinst restarts the service and,
-  on some SBCs, the HCI adapter attach step dies with it.
-* `adapter 'hci0' not found` — `bluetoothd` is up but has **no radio**: the
-  HCI attach never ran (or crashed), so `/sys/class/bluetooth` is empty.
-
-On the Docker host, in order:
-
-```bash
-systemctl status bluetooth          # is the daemon up / failing?
-hciconfig hci0                      # is there a radio at all?
-systemctl restart bluetooth
-```
-
-If the daemon restarts but hci0 is still missing, the HCI attach step needs
-re-running. On boards whose Bluetooth is a UART/serial chip (e.g. the Orange Pi
-Zero 3's UWE5622, which attaches via the `aw859a-bluetooth.service` unit running
-`hciattach_opi`), a failed attach at boot leaves the radio silent even though
-`bluetoothd` runs fine — restart the attach unit:
-
-```bash
-systemctl status aw859a-bluetooth.service   # see it failed / never ran
-systemctl restart aw859a-bluetooth.service
-hciconfig hci0                              # should now show UP RUNNING
-```
-
-The bridge's retry loop (≤ 5 min backoff) reconnects automatically once hci0 is
-back; no container restart needed. If the attach crashed at boot (a transient
-segfault racing the radio firmware init), give the attach unit an automatic
-retry so a package restart can't strand the radio again:
-
-```bash
-sudo mkdir -p /etc/systemd/system/aw859a-bluetooth.service.d
-printf '[Service]\nRestart=on-failure\nRestartSec=2\n' \
-  | sudo tee /etc/systemd/system/aw859a-bluetooth.service.d/override.conf
-sudo systemctl daemon-reload && sudo systemctl restart aw859a-bluetooth.service
 ```
 
 ## Configuration (env vars)
