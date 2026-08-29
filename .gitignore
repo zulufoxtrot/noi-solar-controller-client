@@ -4,4 +4,6 @@ __pycache__/
 venv/
 .DS_Store
 *.egg-info/
+.idea/.opencode/tmp/
+*.sync-conflict*
 .idea/

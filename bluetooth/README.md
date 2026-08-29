@@ -35,9 +35,25 @@ skip scanning.
 
 ### Docker (Linux host with Bluetooth + BlueZ)
 
+Build locally:
+
 ```bash
 docker compose up -d --build
 ```
+
+Or use the prebuilt multi-arch image (linux/amd64 + linux/arm64):
+
+```bash
+docker run -d --name limu-solar --network host --restart unless-stopped \
+  -v /var/run/dbus:/var/run/dbus:ro \
+  -e MQTT_HOST=192.168.1.10 \
+  ghcr.io/zulufoxtrot/noi-solar-controller-client:v0.1.0
+```
+
+Images are published per commit SHA (pin for production) and per release tag
+(`v0.1.0`, ...); `latest` tracks main. See the
+[releases page](https://github.com/zulufoxtrot/noi-solar-controller-client/releases)
+for changelogs.
 
 `docker-compose.yml` uses `network_mode: host` and mounts the host D-Bus socket
 (`/var/run/dbus`) so the container reaches both the Bluetooth adapter and your

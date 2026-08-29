@@ -10,6 +10,7 @@ import signal
 
 from . import modbus
 from . import registers
+from . import __version__ as app_version
 from .ble_client import (
     BleModbusClient,
     SimulatedModbusClient,
@@ -528,7 +529,10 @@ def main() -> None:
         level=cfg.log_level,
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
     )
-    log.info("starting limu-solar PoC (simulate=%s)", cfg.simulate)
+    log.info(
+        "starting limu-solar PoC v%s (simulate=%s)",
+        app_version, cfg.simulate,
+    )
     asyncio.run(run(cfg))
 
 
