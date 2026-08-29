@@ -13,7 +13,7 @@ Features:
 
 ![img.png](images/img.png)
 
-*Telemetry showing in Home Assistant.*
+*Telemetry in Home Assistant.*
 
 ## Interfaces
 
@@ -35,11 +35,9 @@ Once connected to wifi, the controller connects to a private HTTP & MQTT server:
 
 The HTTP API handles account management (user creation, pairing, ...).
 
-The MQTT server handles telemetry.
+The MQTT server handles telemetry. The telemetry is then consumed by the Noi Solar app.
 
 I managed to reverse engineer parts of the API, but I failed to connect to the MQTT server.
-
-The telemetry is then consumed by the Noi Solar app.
 
 ## Quick start
 
@@ -47,7 +45,7 @@ The telemetry is then consumed by the Noi Solar app.
 cd bluetooth
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
-# no hardware — fake telemetry through the MQTT path:
+# no hardware — mock telemetry sent to MQTT:
 SIMULATE=1 MQTT_HOST=192.168.1.10 .venv/bin/python -m app
 
 # with your controller:
@@ -60,4 +58,8 @@ Or run in Docker (needs a Linux host with Bluetooth):
 cd bluetooth && docker compose up -d --build
 ```
 
-Environment: `MQTT_HOST`, `CONTROLLER_ADDRESS` (skip scan), `BLE_PIN` (unlock PIN, default `000000`), `POLL_INTERVAL`, `SIMULATE`. Full table in `bluetooth/README.md`.
+## Keywords
+
+- Limu Solar: Device manufacturer
+- Wyadmin / NOI Technologies: Telemetry system / app editor
+- NOI Solar: iOS/Android client
