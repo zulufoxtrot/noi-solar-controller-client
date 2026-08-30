@@ -240,6 +240,9 @@ class MqttBridge:
         for topic in (
             f"{self._cfg.mqtt_discovery_prefix}/sensor/{self.node_id}/external_temp/config",
             f"{self.base}/external_temp",
+            # the old fork published the same entity as "external_temp_c"
+            f"{self._cfg.mqtt_discovery_prefix}/sensor/{self.node_id}/external_temp_c/config",
+            f"{self.base}/external_temp_c",
             f"{self._cfg.mqtt_discovery_prefix}/sensor/{self.node_id}/today_max_load_w/config",
             f"{self.base}/today_max_load_w",
             f"{self._cfg.mqtt_discovery_prefix}/sensor/{self.node_id}/today_usb_consumption_kwh/config",
