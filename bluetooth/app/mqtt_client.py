@@ -83,10 +83,8 @@ SENSORS: dict[str, tuple] = {
     "today_min_batt_v": ("sensor", "Today Min Battery Voltage", "V", "voltage", "measurement", None, "diagnostic", None),
     "today_consumption_kwh": ("sensor", "Today's Consumption", "kWh", "energy", "total_increasing", "mdi:power-plug", "diagnostic", None),
     "today_max_load_a": ("sensor", "Today Max Load Current", "A", "current", "measurement", None, "diagnostic", None),
-    "today_max_load_w": ("sensor", "Today Max Load Power", "W", "power", "measurement", None, "diagnostic", None),
-    "today_usb_consumption_kwh": ("sensor", "Today USB Consumption", "kWh", "energy", "total_increasing", "mdi:usb", "diagnostic", None),
+    "today_battery_discharge_kwh": ("sensor", "Today Battery Discharge", "kWh", "energy", "total_increasing", "mdi:battery-minus", "diagnostic", None),
     "today_max_usb_a": ("sensor", "Today Max USB Current", "A", "current", "measurement", None, "diagnostic", None),
-    "today_max_usb_w": ("sensor", "Today Max USB Power", "W", "power", "measurement", None, "diagnostic", None),
 }
 
 # state key -> attribute name published on the battery entity's json_attr_t
@@ -233,10 +231,40 @@ class MqttBridge:
         # Ghost-entity cleanup: an old code version once published an
         # external-temp entity (register 0xB9 reads 0xFFFF on units without
         # the sensor). Empty retained payloads remove its discovery and state
-        # topics from the broker/HA.
+        # topics from the broker/HA. Same for the 2026-08-29 stats realign:
+        # the removed today-block keys decoded registers that turned out to
+        # hold other quantities (frozen/aliased counters), so their retained
+        # values were actively misleading. yesterday_* came from an uncommitted
+        # dev fork (never in any release); its retained values sat stale for
+        # days and kept zombie entities alive in HA.
         for topic in (
             f"{self._cfg.mqtt_discovery_prefix}/sensor/{self.node_id}/external_temp/config",
             f"{self.base}/external_temp",
+            f"{self._cfg.mqtt_discovery_prefix}/sensor/{self.node_id}/today_max_load_w/config",
+            f"{self.base}/today_max_load_w",
+            f"{self._cfg.mqtt_discovery_prefix}/sensor/{self.node_id}/today_usb_consumption_kwh/config",
+            f"{self.base}/today_usb_consumption_kwh",
+            f"{self._cfg.mqtt_discovery_prefix}/sensor/{self.node_id}/today_max_usb_w/config",
+            f"{self.base}/today_max_usb_w",
+            *(
+                f"{prefix}/{self.node_id}/{key}{suffix}"
+                for prefix in (self._cfg.mqtt_discovery_prefix + "/sensor", self.base)
+                for key in (
+                    "yesterday_generation_kwh",
+                    "yesterday_max_pv_v",
+                    "yesterday_max_pv_a",
+                    "yesterday_max_pv_w",
+                    "yesterday_max_batt_v",
+                    "yesterday_min_batt_v",
+                    "yesterday_consumption_kwh",
+                    "yesterday_max_load_a",
+                    "yesterday_max_load_w",
+                    "yesterday_usb_consumption_kwh",
+                    "yesterday_max_usb_a",
+                    "yesterday_max_usb_w",
+                )
+                for suffix in ("/config", "")
+            ),
         ):
             self._client.publish(topic, "", retain=True)
         for key, (component, name, unit, dev_cla, state_cla, icon, category, options) in SENSORS.items():

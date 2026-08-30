@@ -382,18 +382,16 @@ class SimulatedModbusClient:
         regs[0x0303 - 0x0300] = 0x008C       # total gen u32 lo (= 1835.1 kWh)
         regs[0x0306 - 0x0300] = 128          # full-charge count
         regs[0x0307 - 0x0300] = 36           # over-discharge count
-        regs[0x0308 - 0x0300] = 183          # today gen (18.3 Wh, x0.1 Wh)
-        regs[0x0309 - 0x0300] = 2400         # today max PV V (24.00)
-        regs[0x030A - 0x0300] = 50           # today max PV A (5.0)
-        regs[0x030B - 0x0300] = 1200         # today max PV W (120.0)
-        regs[0x030C - 0x0300] = 1400         # today max batt V (14.00)
-        regs[0x030D - 0x0300] = 1200         # today min batt V (12.00)
-        regs[0x030E - 0x0300] = 350          # today consumption (35.0 Wh)
-        regs[0x030F - 0x0300] = 25           # today max load A (2.5)
-        regs[0x0310 - 0x0300] = 800          # today max load W (80.0)
-        regs[0x0311 - 0x0300] = 250          # today USB consumption (25.0 Wh)
-        regs[0x0312 - 0x0300] = 15           # today max USB A (1.5)
-        regs[0x0313 - 0x0300] = 50           # today max USB W (5.0)
+        regs[0x0308 - 0x0300] = 1669         # today gen (166.9 Wh, x0.1 Wh)
+        regs[0x0309 - 0x0300] = 2397         # today max PV V (23.97)
+        regs[0x030A - 0x0300] = 25           # today max PV A (2.5)
+        regs[0x030B - 0x0300] = 530          # today max PV W (53.0)
+        regs[0x030C - 0x0300] = 1429         # today max batt V (14.29)
+        regs[0x030D - 0x0300] = 566          # today min batt V (5.66 — suspect register)
+        regs[0x030E - 0x0300] = 36           # today max load A (0.36, x0.01 A)
+        regs[0x0310 - 0x0300] = 191          # today battery discharge (19.1 Wh)
+        regs[0x0312 - 0x0300] = 0            # today max USB A (0.0)
+        regs[0x0313 - 0x0300] = 490          # today consumption (49.0 Wh, x0.1 Wh)
         return regs
 
     @property

@@ -141,7 +141,7 @@ def decode_extension(regs: list[int]) -> dict:
     return {
         "load_switch": "on" if regs[0x00B0 - 0x00B0] else "off",
         "load_voltage": round(regs[0x00B1 - 0x00B0] * 0.01, 2),
-        "load_current": round(regs[0x00B2 - 0x00B0] * 0.01, 2),
+        "load_current": round(regs[0x00B2 - 0x00B0] * 0.1, 2),  # manual says x0.01; live 4.5 W / 13.33 V = 0.34 A = raw 3 at x0.1
         "load_power": round(regs[0x00B3 - 0x00B0] * 0.1, 1),
         "usb_switch": "on" if regs[0x00B4 - 0x00B0] else "off",
         "usb_voltage": round(regs[0x00B5 - 0x00B0] * 0.01, 2),
@@ -167,10 +167,30 @@ def decode_stats(regs: list[int]) -> dict:
 
     Totals are 32-bit and stored in Wh despite the manual's "0.1 kWh" label
     (a 32-bit word was measured at 1,835,148 = 1835.1 kWh), so kWh = raw/1000.
-    Every today value is a SINGLE 16-bit register (manual page-8/9 table):
-    energies are x0.1 Wh (=> kWh = raw/10000), voltages x0.01 V, currents and
-    powers x0.1 A / x0.1 W.
+
+    Today block (0x0308-0x0313) — EMPIRICAL layout (2026-08-29, fw 2.0.4),
+    which diverges from the manual p.9 table in the tail:
+      * 0x030E (manual: "consumption x0.1 Wh") holds the max load current at
+        x0.01 A: it sat frozen at raw 36 = 0.36 A while the load drew a
+        constant 4.2-4.5 W for 11 h (live load current 0.30-0.34 A).
+      * 0x0313 (manual: "max USB power") is today's LOAD ENERGY at x0.1 Wh:
+        the only register that increments with the load (raw +5 per ~5.9 min
+        burst = 5.1 W avg vs 4.35 W live load; cumulative 490 raw = 49.0 Wh
+        = 4.35 W x 11.3 h since the 08:00 load start).
+      * 0x0310 (manual: "max load power") ticks only while the battery
+        carries the load (raw +6/burst = 6.4 W avg vs 4.4 W load): battery-
+        side discharge energy at x0.1 Wh; did not move while PV covered the
+        load earlier in the day.
+      * 0x0311 (manual: "USB Wh") sat frozen at raw 464 with the USB outlet
+        idle at 0 W — no usable USB energy register exists in this block.
+    What still matches the manual: 0x0308 generation x0.1 Wh, PV maxima
+    0x0309-0x030B (23.97 V x 2.5 A ≈ 53.0 W), 0x030C max batt V x0.01
+    (14.29 = absorb voltage), 0x0312 max USB A x0.1.
+    0x030D (manual: "min batt V") is suspect: it read 5.66 V on a 4S lithium
+    pack (impossible); dawn min PV voltage would fit — published as-is until
+    re-verified.
     """
+
     def energy(hi_idx: int, lo_idx: int) -> float:
         return round(_u16_to_u32(regs[hi_idx], regs[lo_idx]) / 1000.0, 1)
 
@@ -188,11 +208,10 @@ def decode_stats(regs: list[int]) -> dict:
         "today_max_pv_a": round(regs[0x030A - 0x0300] * 0.1, 2),
         "today_max_pv_w": round(regs[0x030B - 0x0300] * 0.1, 1),
         "today_max_batt_v": round(regs[0x030C - 0x0300] * 0.01, 2),
+        # manual says min batt V; 5.66 V is impossible on a 4S pack — suspect
         "today_min_batt_v": round(regs[0x030D - 0x0300] * 0.01, 2),
-        "today_consumption_kwh": energy_today(0x030E - 0x0300),
-        "today_max_load_a": round(regs[0x030F - 0x0300] * 0.1, 2),
-        "today_max_load_w": round(regs[0x0310 - 0x0300] * 0.1, 1),
-        "today_usb_consumption_kwh": energy_today(0x0311 - 0x0300),
+        "today_max_load_a": round(regs[0x030E - 0x0300] * 0.01, 2),
+        "today_battery_discharge_kwh": energy_today(0x0310 - 0x0300),
         "today_max_usb_a": round(regs[0x0312 - 0x0300] * 0.1, 2),
-        "today_max_usb_w": round(regs[0x0313 - 0x0300] * 0.1, 1),
+        "today_consumption_kwh": energy_today(0x0313 - 0x0300),
     }

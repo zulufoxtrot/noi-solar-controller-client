@@ -99,7 +99,25 @@ Controller events: count at 0x0100, records at 0x0101… (6 regs × 20). Communi
 Event codes: 1 power-on ok · 2 init fail · 3/4 start/end charging · 5/6 load on/off · 7/8 charge circuit open/short · 9/10 load open/short · 11 batt low alarm · 12 batt low-V protect · 13 batt overpressure · 14 overheat · 15 load short · 16/17 charge on/off · 18/19 USB on/off · 20 PV overV · 21 charge overcurrent · 22 battery absent · **128 BT wrong password · 129 BT connected · 130/131 Wi-Fi fail/ok · 132/133 MQTT connect fail/ok · 134/135 MQTT subscribe fail/ok**.
 
 ### Statistics Area 0x0300–0x0378 (R)
-Total runtime (2, s — statically 8 across 5 s, unit unconfirmed) · cumulative generation (2, Wh — measured 0x001C008C=1,835,148 ⇒ 1835.1 kWh; manual's "kWh" label is really Wh) · total consumption (2) · full-charge count · over-discharge count · today's block (0x0308–0x0313, ALL single u16 per manual p.9): generation ×0.1 Wh / PV max V ×0.01, A ×0.1, W ×0.1 / batt max-min V ×0.01 / consumption ×0.1 Wh / load max A ×0.1, W ×0.1 / USB Wh ×0.1, max A ×0.1, max W ×0.1 · yesterday at 0x0314 (same layout, not read by the bridge) … daily blocks; statistical log: 12-register records, date at word 14, h:m:s at words 15–16. The bridge reads 0x0300–0x0313 in one 20-reg block (✅ 2026-08-11).
+Total runtime (2, s — ticks 1/s; read 44124 s on 2026-08-29 ⇒ booted ~07:15) · cumulative generation (2, Wh — measured 0x001C008C=1,835,148 ⇒ 1835.1 kWh; manual's "kWh" label is really Wh) · total consumption (2) · full-charge count · over-discharge count · today's block (0x0308–0x0313, ALL single u16).
+
+**Today block — empirical layout (2026-08-29, fw 2.0.4), diverges from manual p.9:**
+
+| Addr | Manual says | Reality (live-verified) |
+|------|-------------|--------------------------|
+| 0x0308 | gen ×0.1 Wh | ✅ gen ×0.1 Wh (1669 = 166.9 Wh, plausible vs 53 W PV peak) |
+| 0x0309–0B | PV max V/A/W ×0.01/0.1/0.1 | ✅ (23.97 V × 2.5 A ≈ 53.0 W, mutually consistent) |
+| 0x030C | max batt V ×0.01 | ✅ 14.29 V = today's absorb voltage |
+| 0x030D | min batt V ×0.01 | ❌ suspect — read 5.66 V on a 4S pack (impossible); dawn min PV V would fit |
+| 0x030E | consumption ×0.1 Wh | ❌ **max load A ×0.01** — frozen at 36 = 0.36 A while load drew 4.2–4.5 W for 11 h (live 0.30–0.34 A) |
+| 0x030F | max load A ×0.1 | ❌ unknown, static 516; not max load W (contradicts 0.36 A) |
+| 0x0310 | max load W ×0.1 | ❌ **battery discharge energy ×0.1 Wh** — ticks (+6/burst ≈ 6.4 W) only while battery carries the load; static while PV covered it |
+| 0x0311 | USB Wh ×0.1 | ❌ unknown, frozen at 464 with USB idle at 0 W — no usable USB energy register found |
+| 0x0312 | max USB A ×0.1 | ✅ 0 (nothing on USB) |
+| 0x0313 | max USB W ×0.1 | ❌ **today's load energy ×0.1 Wh** — the only register that increments with the load (+5/burst = 5.1 W avg vs 4.35 W live; 490 = 49.0 Wh = 4.35 W × 11.3 h since the 08:00 load start) |
+
+Consumption/USB fix deployed 2026-08-29 (`today_consumption` ← 0x0313, `today_max_load_a` ← 0x030E ×0.01, new `today_battery_discharge` ← 0x0310; max-load-W / USB-Wh / max-USB-W dropped — no valid registers).
+Caveats: totals look partially reset by the fw-2.0.4 power cycle (full-charge=1, over-discharge=1, total gen raw 100 = 100 Wh < today's 166.9 Wh ⇒ totals mapping suspect too); 0x0314+ reads decoded as "yesterday" produced time-like fragments (raw 1321 = 0x0529, 1311 = 0x051F ⇒ 05:29 / 05:31?) — that range is likely the statistical log, not yesterday. The bridge reads 0x0300–0x0313 in one 20-reg block (✅ 2026-08-11).
 
 ### Undocumented / gated areas
 * **0x0400–0x0480+**: reads → exception 0x04 (operation failed). Almost certainly the **BLE-password-gated config area** (Wi-Fi credentials, MQTT settings, charge parameters). The manual's pages 13-14 (covering 0x0400+) are missing from the PDF.
